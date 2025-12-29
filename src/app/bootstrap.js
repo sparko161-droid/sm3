@@ -1186,8 +1186,14 @@ function cartScreen() {
   for (const x of items) {
     const el = document.querySelector(`[data-step="${x.key}"]`);
     if (!el) continue;
-    el.querySelector('.dec').onclick = () => updateCartItemQty(x.key, Number(x.quantity) - 1), rerender();
-    el.querySelector('.inc').onclick = () => updateCartItemQty(x.key, Number(x.quantity) + 1), rerender();
+    el.querySelector('.dec').onclick = () => {
+      updateCartItemQty(x.key, Number(x.quantity) - 1);
+      rerender();
+    };
+    el.querySelector('.inc').onclick = () => {
+      updateCartItemQty(x.key, Number(x.quantity) + 1);
+      rerender();
+    };
   }
 
   const clearBtn = document.getElementById('clearCart');
