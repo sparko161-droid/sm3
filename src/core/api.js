@@ -57,5 +57,9 @@ export const updateOrder = (orderId, payload) => {
 
 export const getOrderStatus = (orderId) => {
   const { baseUrl } = loadAuth();
-  return req({ method: 'GET', url: `${baseUrl}/order/${orderId}/status` });
+  return req({
+    method: 'GET',
+    url: `${baseUrl}/order/${orderId}/status`,
+    timeout: 2000, // таймаут 2 секунды
+  });
 };
