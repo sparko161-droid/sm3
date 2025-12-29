@@ -39,6 +39,8 @@ window.appState ||= {
   orderData: null,
   orderDraft: null,
   orderDraftText: '',
+  orderInputText: '',
+  orderMenuMap: null,
   orderId: loadOrderId(),
   screen: 'auth',      // auth | restaurants | hub | menu | availability | cart
   history: [],         // stack of previous screens for Back
@@ -124,6 +126,10 @@ dialog{border:none;border-radius:16px;padding:0;max-width:92vw;width:900px;}
     .order-item .row{align-items:flex-start;}
     .order-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
     @media (max-width:600px){.order-grid{grid-template-columns:1fr;}}
+    .order-item-img{width:64px;height:64px;border-radius:12px;overflow:hidden;background:#f6f6f6;flex:0 0 auto;display:flex;align-items:center;justify-content:center;}
+    .order-item-img img{width:100%;height:100%;object-fit:cover;display:block;}
+    .order-section-title{font-weight:650;margin-top:12px;}
+    .order-meta-list{display:flex;flex-direction:column;gap:6px;margin-top:6px;}
 
   `;
   document.head.appendChild(el);
@@ -287,7 +293,13 @@ function tgConfirm(message) {
 // ---- Menu helpers ----
 function unwrapJsonPayload(value) {
   if (value == null) return null;
-  if (typeof value === 'string') return JSON.parse(value);
+  if (typeof value === 'string') {
+    try {
+      return JSON.parse(value);
+    } catch (_) {
+      return value;
+    }
+  }
   return value;
 }
 
@@ -327,6 +339,18 @@ function normalizeAvailabilityResponse(raw) {
     items: Array.isArray(outer?.items) ? outer.items : [],
     modifiers: Array.isArray(outer?.modifiers) ? outer.modifiers : [],
   };
+}
+
+function normalizeOrderResponse(raw) {
+  const outer = unwrapJsonPayload(raw);
+  if (!outer) return null;
+
+  if (outer.data != null) {
+    const inner = unwrapJsonPayload(outer.data);
+    return inner || outer;
+  }
+
+  return outer;
 }
 
 function stopIdVariants(value) {
@@ -384,10 +408,42 @@ function itemToSearchString(it) {
   ].map(safe).join(' ').toLowerCase();
 }
 
+function buildMenuItemMap(menu) {
+  return new Map((menu?.items || []).map((it) => [String(it.id), it]));
+}
+
 function rub(v) {
   const n = Number(v || 0);
   if (!Number.isFinite(n)) return `${v} ₽`;
   return `${n} ₽`;
+}
+
+function flattenPromos(order) {
+  const promos = [];
+  if (Array.isArray(order?.promos)) promos.push(...order.promos.map((p) => ({ ...p, scope: 'order' })));
+  const items = Array.isArray(order?.items) ? order.items : [];
+  for (const it of items) {
+    if (Array.isArray(it?.promos)) {
+      promos.push(...it.promos.map((p) => ({ ...p, scope: 'item', itemId: it.id, itemName: it.name })));
+    }
+  }
+  return promos;
+}
+
+function summarizePromos(promos) {
+  const list = Array.isArray(promos) ? promos : [];
+  let discountTotal = 0;
+  let giftCount = 0;
+  const readable = list.map((p) => {
+    const discount = safeNum(p.discount, 0);
+    discountTotal += discount;
+    if (!discount) giftCount += 1;
+    const type = safeStr(p.type, 'PROMO');
+    const scope = p.scope === 'item' ? `позиция: ${safeStr(p.itemName, p.itemId)}` : 'заказ';
+    const label = discount ? `${type}: -${rub(discount)}` : `${type}: подарок`;
+    return `${label} · ${scope}`;
+  });
+  return { discountTotal, giftCount, readable };
 }
 
 function downloadJson(obj, filename) {
@@ -521,6 +577,7 @@ async function restaurantsScreen() {
         saveRestaurant({ id: restaurantId, name: btn.textContent.trim() });
         window.appState.restaurant = { id: restaurantId, name: btn.textContent.trim() };
         window.appState.orderId = null;
+        window.appState.orderMenuMap = null;
         setScreen('hub');
       };
     });
@@ -537,6 +594,8 @@ async function restaurantsScreen() {
       window.appState.orderData = null;
       window.appState.orderDraft = null;
       window.appState.orderDraftText = '';
+      window.appState.orderInputText = '';
+      window.appState.orderMenuMap = null;
       window.appState.history = [];
       setScreen('auth', { pushHistory: false });
     };
@@ -589,6 +648,8 @@ function hubScreen() {
     window.appState.orderData = null;
     window.appState.orderDraft = null;
     window.appState.orderDraftText = '';
+    window.appState.orderInputText = '';
+    window.appState.orderMenuMap = null;
     window.appState.history = [];
     setScreen('restaurants', { pushHistory: false });
   };
@@ -604,6 +665,8 @@ function hubScreen() {
     window.appState.orderData = null;
     window.appState.orderDraft = null;
     window.appState.orderDraftText = '';
+    window.appState.orderInputText = '';
+    window.appState.orderMenuMap = null;
     window.appState.history = [];
     setScreen('auth', { pushHistory: false });
   };
@@ -629,6 +692,7 @@ async function menuScreen() {
     ]);
 
     const menu = normalizeMenuResponse(rawComp);
+    st.orderMenuMap = buildMenuItemMap(menu);
     const menuVm = buildMenuViewModel(menu);
 
     const rawAvail = rawAvail0 ? normalizeAvailabilityResponse(rawAvail0) : { items: [], modifiers: [] };
@@ -1131,7 +1195,7 @@ function cloneJson(obj) {
   return obj ? JSON.parse(JSON.stringify(obj)) : obj;
 }
 
-function renderOrderCard(order) {
+function renderOrderCard(order, menuMap) {
   if (!order) return '';
   const items = Array.isArray(order.items) ? order.items : [];
   const delivery = order.deliveryInfo || {};
@@ -1144,6 +1208,13 @@ function renderOrderCard(order) {
   const clientName = safeStr(delivery.clientName, '');
   const phone = safeStr(delivery.phoneNumber, '');
   const addressFull = safeStr(addr.full, '');
+  const addressLat = safeStr(addr.latitude, '');
+  const addressLon = safeStr(addr.longitude, '');
+  const comment = safeStr(order.comment, '');
+  const persons = safeNum(order.persons, 0);
+  const paymentType = safeStr(payment.paymentType, '');
+  const change = safeNum(payment.change, 0);
+  const promoSummary = summarizePromos(flattenPromos(order));
   return `
     <div class="card">
       <div class="row" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -1161,6 +1232,7 @@ function renderOrderCard(order) {
           <div style="font-weight:650;">${addressFull || '—'}</div>
           <div class="muted" style="font-size:12px;">${clientName ? `${clientName} · ` : ''}${phone}</div>
           <div class="muted" style="font-size:12px;">${deliveryDate}</div>
+          <div class="muted" style="font-size:12px;">${addressLat && addressLon ? `${addressLat}, ${addressLon}` : ''}</div>
         </div>
         <div>
           <div class="muted" style="font-size:12px;">Оплата</div>
@@ -1173,24 +1245,65 @@ function renderOrderCard(order) {
           <div class="row" style="justify-content:space-between;">
             <span class="muted">total</span><b>${rub(payment.total)}</b>
           </div>
+          ${paymentType ? `
+            <div class="row" style="justify-content:space-between;">
+              <span class="muted">payment</span><b>${paymentType}</b>
+            </div>
+          ` : ''}
+          ${change ? `
+            <div class="row" style="justify-content:space-between;">
+              <span class="muted">change</span><b>${rub(change)}</b>
+            </div>
+          ` : ''}
         </div>
       </div>
-      <div style="margin-top:12px;" class="order-items">
+      <div class="order-meta-list">
+        ${comment ? `<div><span class="muted">Комментарий:</span> ${comment}</div>` : ''}
+        ${persons ? `<div><span class="muted">Персон:</span> ${persons}</div>` : ''}
+        ${promoSummary.discountTotal || promoSummary.giftCount ? `
+          <div>
+            <span class="muted">Промо:</span>
+            ${promoSummary.discountTotal ? `скидка ${rub(promoSummary.discountTotal)}` : ''}
+            ${promoSummary.giftCount ? `· подарков ${promoSummary.giftCount}` : ''}
+          </div>
+        ` : ''}
+        ${promoSummary.readable.length ? `
+          <div class="muted" style="font-size:12px;">
+            ${promoSummary.readable.map((x) => `<div>${x}</div>`).join('')}
+          </div>
+        ` : ''}
+      </div>
+      <div class="order-section-title">Позиции</div>
+      <div style="margin-top:8px;" class="order-items">
         ${items.map((it) => {
           const mods = (it.modifications || []).map((m) => `${safeStr(m.name, m.id)} ×${safeNum(m.quantity, 1)}`).join(', ');
           const qty = safeNum(it.quantity, 1);
           const price = safeNum(it.price, 0);
+          const modsTotal = (it.modifications || []).reduce((s, m) => s + safeNum(m.price, 0) * safeNum(m.quantity, 1), 0);
+          const unitPrice = price + modsTotal;
+          const menuItem = menuMap?.get?.(String(it.id));
+          const imgUrl = menuItem?.images?.[0]?.url || menuItem?.images?.[0] || '';
+          const itemPromos = summarizePromos(Array.isArray(it.promos) ? it.promos : []);
           return `
             <div class="order-item">
-              <div class="row" style="justify-content:space-between;gap:10px;">
-                <div>
+              <div class="row" style="gap:10px;align-items:flex-start;">
+                <div class="order-item-img">
+                  ${imgUrl ? `<img src="${imgUrl}" alt="">` : `<div class="muted" style="font-size:11px;">нет фото</div>`}
+                </div>
+                <div style="min-width:0;flex:1;">
                   <div style="font-weight:650;">${safeStr(it.name, it.id)}</div>
                   <div class="muted" style="font-size:12px;">id: <code>${safeStr(it.id, '')}</code></div>
                   ${mods ? `<div class="muted" style="font-size:12px;margin-top:4px;">${mods}</div>` : ''}
+                  ${itemPromos.discountTotal || itemPromos.giftCount ? `
+                    <div class="muted" style="font-size:12px;margin-top:4px;">
+                      ${itemPromos.discountTotal ? `скидка ${rub(itemPromos.discountTotal)}` : ''}
+                      ${itemPromos.giftCount ? `· подарков ${itemPromos.giftCount}` : ''}
+                    </div>
+                  ` : ''}
                 </div>
                 <div style="text-align:right;">
-                  <div class="muted" style="font-size:12px;">${qty} × ${rub(price)}</div>
-                  <div style="font-weight:700;">${rub(qty * price)}</div>
+                  <div class="muted" style="font-size:12px;">${qty} × ${rub(unitPrice)}</div>
+                  <div style="font-weight:700;">${rub(qty * unitPrice)}</div>
                 </div>
               </div>
             </div>
@@ -1423,6 +1536,19 @@ async function ordersScreen() {
     ${header('Заказы')}
 
     <div class="card">
+      <div style="font-weight:700;margin-bottom:8px;">Входящий JSON заказа</div>
+      <div class="muted" style="font-size:12px;margin-bottom:8px;">Поддерживаются ответы вида <code>{ data: "{...}" }</code> и чистый JSON заказа.</div>
+      <label class="field">
+        <span class="field-label">JSON</span>
+        <textarea id="orderInputJson" style="min-height:160px;"></textarea>
+      </label>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button id="applyOrderInput" type="button">Нормализовать и показать</button>
+        <button id="clearOrderInput" type="button">Очистить</button>
+      </div>
+    </div>
+
+    <div class="card">
       <div style="font-weight:700;margin-bottom:8px;">ID заказа</div>
       <div class="row" style="gap:8px;flex-wrap:wrap;">
         <input id="orderIdInput" placeholder="Введите ID заказа" value="${st.orderId || ''}" />
@@ -1458,7 +1584,7 @@ async function ordersScreen() {
         </div>
       </div>
 
-      ${st.orderData ? renderOrderCard(st.orderData) : `
+      ${st.orderData ? renderOrderCard(st.orderData, st.orderMenuMap) : `
         <div class="card" style="margin-top:12px;">
           <div class="muted">Заказ ещё не загружен.</div>
         </div>
@@ -1530,6 +1656,61 @@ async function ordersScreen() {
     });
   };
 
+  const ensureOrderMenuMap = async () => {
+    if (st.orderMenuMap || !st.restaurant?.id) return st.orderMenuMap;
+    try {
+      const rawComp = await getMenuComposition(st.restaurant.id);
+      const menu = normalizeMenuResponse(rawComp);
+      st.orderMenuMap = buildMenuItemMap(menu);
+    } catch (_) {
+      st.orderMenuMap = null;
+    }
+    return st.orderMenuMap;
+  };
+
+  const applyNormalizedOrder = async (raw) => {
+    const normalized = normalizeOrderResponse(raw);
+    if (!normalized || typeof normalized !== 'object') {
+      throw new Error('Некорректный JSON заказа');
+    }
+    st.orderData = normalized;
+    st.orderDraft = cloneJson(normalized);
+    st.orderDraftText = JSON.stringify(st.orderDraft, null, 2);
+    await ensureOrderMenuMap();
+    setResponse(normalized);
+    rerender();
+  };
+
+  const orderInputArea = document.getElementById('orderInputJson');
+  if (orderInputArea) {
+    orderInputArea.value = st.orderInputText || '';
+    orderInputArea.oninput = () => { st.orderInputText = orderInputArea.value; };
+  }
+
+  const applyOrderInputBtn = document.getElementById('applyOrderInput');
+  if (applyOrderInputBtn) {
+    applyOrderInputBtn.onclick = async () => {
+      try {
+        const raw = JSON.parse(st.orderInputText || '');
+        applyOrderInputBtn.disabled = true;
+        await applyNormalizedOrder(raw);
+      } catch (e) {
+        const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Некорректный JSON';
+        try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      } finally {
+        applyOrderInputBtn.disabled = false;
+      }
+    };
+  }
+
+  const clearOrderInputBtn = document.getElementById('clearOrderInput');
+  if (clearOrderInputBtn) {
+    clearOrderInputBtn.onclick = () => {
+      st.orderInputText = '';
+      if (orderInputArea) orderInputArea.value = '';
+    };
+  }
+
   if (orderIdInput) orderIdInput.value = st.orderId || '';
 
   const saveOrderBtn = document.getElementById('saveOrderId');
@@ -1592,11 +1773,7 @@ async function ordersScreen() {
       try {
         fetchBtn.disabled = true;
         const data = await getOrder(st.orderId);
-        st.orderData = data;
-        st.orderDraft = cloneJson(data);
-        st.orderDraftText = JSON.stringify(st.orderDraft, null, 2);
-        setResponse(data);
-        rerender();
+        await applyNormalizedOrder(data);
       } catch (e) {
         setError(e);
         const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
@@ -1759,6 +1936,7 @@ async function availabilityScreen() {
 
     const rawAvail = normalizeAvailabilityResponse(rawAvail0);
     const menu = rawComp ? normalizeMenuResponse(rawComp) : { categories: [], items: [] };
+    st.orderMenuMap = buildMenuItemMap(menu);
     const itemById = new Map((menu.items || []).map((it) => [String(it.id), it]));
 
     const items = rawAvail?.items || [];
