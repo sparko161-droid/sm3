@@ -10,3 +10,7 @@ const CART_KEY='iiko_cart';
 export const saveCart=c=>localStorage.setItem(CART_KEY,JSON.stringify(c));
 export const loadCart=()=>{try{const v=JSON.parse(localStorage.getItem(CART_KEY)||'{"items":[]}');const items=Array.isArray(v?.items)?v.items:[];return {items};}catch(_){return {items:[]};}};
 export const clearCart=()=>localStorage.removeItem(CART_KEY);
+const ORDER_KEY='iiko_order_id';
+export const saveOrderId=id=>localStorage.setItem(ORDER_KEY,JSON.stringify(id));
+export const loadOrderId=()=>{try{return JSON.parse(localStorage.getItem(ORDER_KEY)||'""')||'';}catch(_){return '';}};
+export const clearOrderId=()=>localStorage.removeItem(ORDER_KEY);

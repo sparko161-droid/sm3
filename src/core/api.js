@@ -29,3 +29,28 @@ export const createOrder = (payload) => {
     body: payload
   });
 };
+
+export const getOrderInfo = (orderId) => {
+  const { baseUrl } = loadAuth();
+  return req({ method: 'GET', url: `${baseUrl}/order/${orderId}` });
+};
+
+export const cancelOrder = (orderId) => {
+  const { baseUrl } = loadAuth();
+  return req({ method: 'POST', url: `${baseUrl}/order/${orderId}/cancel` });
+};
+
+export const updateOrder = (orderId, payload = {}) => {
+  const { baseUrl } = loadAuth();
+  return req({
+    method: 'POST',
+    url: `${baseUrl}/order/${orderId}/update`,
+    headers: { 'Content-Type': 'application/json' },
+    body: payload
+  });
+};
+
+export const getOrderStatus = (orderId) => {
+  const { baseUrl } = loadAuth();
+  return req({ method: 'GET', url: `${baseUrl}/order/${orderId}/status` });
+};

@@ -9,8 +9,19 @@ import {
   loadCart,
   saveCart,
   clearCart,
+  loadOrderId,
+  saveOrderId,
 } from '../core/storage.js';
-import { getRestaurants, getMenuComposition, getAvailability, createOrder } from '../core/api.js';
+import {
+  getRestaurants,
+  getMenuComposition,
+  getAvailability,
+  createOrder,
+  getOrderInfo,
+  cancelOrder,
+  updateOrder,
+  getOrderStatus,
+} from '../core/api.js';
 
 const app = document.getElementById('app');
 const render = (html) => (app.innerHTML = html);
@@ -20,7 +31,8 @@ window.appState ||= {
   auth: null,          // { baseUrl, clientId, clientSecret, accessToken }
   restaurant: null,    // { id, name }
   cart: { items: [] },  // [{ key, itemId, name, qty, basePrice, modifiers: [{id,name,price,amount}], totalPrice }]
-  screen: 'auth',      // auth | restaurants | hub | menu | availability | cart
+  orderId: '',
+  screen: 'auth',      // auth | restaurants | hub | menu | availability | cart | orders
   history: [],         // stack of previous screens for Back
 };
 
@@ -490,7 +502,7 @@ function hubScreen() {
       <button id="goMenu">🍽 Меню</button>
       <button id="goAvail">🚫 Недоступные позиции</button>
       <button id="goCart">🛒 Корзина <span class="badge" id="cartCountBadge"></span></button>
-      <button disabled>🧾 Заказы (скоро)</button>
+      <button id="goOrders">🧾 Заказы</button>
       <button disabled>➕ Создание заказа (позже)</button>
     </div>
 
@@ -509,6 +521,8 @@ function hubScreen() {
   if (b) b.textContent = cc ? String(cc) : '';
   const goCart = document.getElementById('goCart');
   if (goCart) goCart.onclick = () => setScreen('cart');
+  const goOrders = document.getElementById('goOrders');
+  if (goOrders) goOrders.onclick = () => setScreen('orders');
 
   document.getElementById('changeRest').onclick = () => {
     window.appState.restaurant = null;
@@ -1043,6 +1057,102 @@ function buildOrderPayload() {
   };
 }
 
+function ordersScreen() {
+  const st = window.appState;
+  if (!st.restaurant?.id) {
+    setScreen('restaurants', { pushHistory: false });
+    return;
+  }
+
+  render(`
+    ${header('Заказы')}
+    <div class="card">
+      <div class="list">
+        <label class="field">
+          <span class="field-label">Order ID</span>
+          <input id="orderIdInput" placeholder="Введите orderId" />
+        </label>
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <button id="saveOrderId" type="button">Сохранить</button>
+          <span class="muted" id="orderIdSaved"></span>
+        </div>
+        <div id="orderErr" style="color:#b00;"></div>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:700;margin-bottom:8px;">Действия</div>
+      <div class="list">
+        <button id="orderInfo" type="button">ℹ️ Информация</button>
+        <button id="orderCancel" type="button">✋ Отмена</button>
+        <button id="orderUpdate" type="button">🔄 Обновление</button>
+        <button id="orderStatus" type="button">📦 Статус</button>
+      </div>
+    </div>
+
+    <dialog id="jsonDialog">
+      <div class="dlg">
+        <div class="row" style="justify-content:space-between;align-items:center;">
+          <div style="font-weight:650;">Ответ</div>
+          <form method="dialog"><button type="submit">Закрыть</button></form>
+        </div>
+        <div class="hr"></div>
+        <pre id="jsonPre"></pre>
+      </div>
+    </dialog>
+  `);
+
+  wireBackButton();
+
+  const input = document.getElementById('orderIdInput');
+  const err = document.getElementById('orderErr');
+  const savedLabel = document.getElementById('orderIdSaved');
+  if (input) input.value = safeStr(st.orderId, '');
+  if (savedLabel && st.orderId) savedLabel.textContent = `Сохранено: ${st.orderId}`;
+
+  const setOrderId = (value) => {
+    const nextId = safeStr(value || '', '').trim();
+    if (!nextId) {
+      err.textContent = 'Введите orderId.';
+      return null;
+    }
+    err.textContent = '';
+    st.orderId = nextId;
+    saveOrderId(nextId);
+    if (savedLabel) savedLabel.textContent = `Сохранено: ${nextId}`;
+    return nextId;
+  };
+
+  const ensureOrderId = () => {
+    const nextId = setOrderId(input?.value || st.orderId || '');
+    return nextId;
+  };
+
+  const runAction = async (title, action) => {
+    const orderId = ensureOrderId();
+    if (!orderId) return;
+    try {
+      const res = await action(orderId);
+      openJsonDialog({ action: title, orderId, response: res });
+    } catch (e) {
+      const message = e?.message || String(e);
+      openJsonDialog({ action: title, orderId, error: message, details: e || null });
+    }
+  };
+
+  const saveBtn = document.getElementById('saveOrderId');
+  if (saveBtn) saveBtn.onclick = () => setOrderId(input?.value || '');
+
+  const infoBtn = document.getElementById('orderInfo');
+  if (infoBtn) infoBtn.onclick = () => runAction('info', getOrderInfo);
+  const cancelBtn = document.getElementById('orderCancel');
+  if (cancelBtn) cancelBtn.onclick = () => runAction('cancel', cancelOrder);
+  const updateBtn = document.getElementById('orderUpdate');
+  if (updateBtn) updateBtn.onclick = () => runAction('update', (orderId) => updateOrder(orderId, {}));
+  const statusBtn = document.getElementById('orderStatus');
+  if (statusBtn) statusBtn.onclick = () => runAction('status', getOrderStatus);
+}
+
 function cartScreen() {
   const st = window.appState;
   st.cart ||= { items: [] };
@@ -1359,6 +1469,7 @@ function rerender() {
   // hydrate from storage once
   st.auth ||= loadAuth();
   st.restaurant ||= loadRestaurant();
+  st.orderId ||= loadOrderId();
 
   if (!st.auth?.accessToken) {
     st.screen = 'auth';
@@ -1371,6 +1482,7 @@ function rerender() {
   if (st.screen === 'hub') return hubScreen();
   if (st.screen === 'menu') return menuScreen();
   if (st.screen === 'availability') return availabilityScreen();
+  if (st.screen === 'orders') return ordersScreen();
   if (st.screen === 'cart') return cartScreen();
 
   // fallback
@@ -1390,6 +1502,7 @@ function bootstrap() {
   window.appState.auth = loadAuth();
   window.appState.restaurant = loadRestaurant();
   window.appState.cart = loadCart();
+  window.appState.orderId = loadOrderId();
   window.appState.screen = window.appState.auth?.accessToken ? (window.appState.restaurant?.id ? 'hub' : 'restaurants') : 'auth';
 
   // Telegram: expand UI
