@@ -6,6 +6,9 @@ import {
   loadRestaurant,
   saveRestaurant,
   clearRestaurant,
+  loadOrderId,
+  saveOrderId,
+  clearOrderId,
   loadCart,
   saveCart,
   clearCart,
@@ -31,11 +34,12 @@ const render = (html) => (app.innerHTML = html);
 window.appState ||= {
   auth: null,          // { baseUrl, clientId, clientSecret, accessToken }
   restaurant: null,    // { id, name }
+  orderId: null,       // last created order id
   cart: { items: [] },  // [{ key, itemId, name, qty, basePrice, modifiers: [{id,name,price,amount}], totalPrice }]
-  orderId: '',
   orderData: null,
   orderDraft: null,
   orderDraftText: '',
+  orderId: loadOrderId(),
   screen: 'auth',      // auth | restaurants | hub | menu | availability | cart
   history: [],         // stack of previous screens for Back
 };
@@ -75,6 +79,9 @@ function ensureStyles() {
     
     #restaurantBadge{position:fixed;top:10px;right:12px;z-index:1000;display:none;}
     .rest-badge{background:#f4f4f5;border-radius:10px;padding:6px 10px;font-size:12px;line-height:1.2;text-align:right;box-shadow:0 2px 6px rgba(0,0,0,.08);}
+    .rest-compact{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;background:#f4f4f5;border-radius:10px;padding:4px 8px;line-height:1.2;}
+    .rest-compact code{font-size:11px;}
+    .rest-order{white-space:nowrap;}
     .rest-name{font-weight:650;}
     .rest-id{opacity:.65;}
     .itemDlgHead{display:flex;gap:12px;align-items:flex-start;}
@@ -151,8 +158,14 @@ function header(title) {
   const st = window.appState;
   const showBack = st.screen !== 'auth' && st.history.length > 0;
   const showCart = st.screen === 'menu';
+  const orderId = st.orderId || st.order?.orderId || st.order?.id || '';
   const restaurantInfo = (st.restaurant?.id && st.screen !== 'auth' && st.screen !== 'restaurants')
-    ? `${st.restaurant.name ? st.restaurant.name : 'Restaurant'} · <code>${st.restaurant.id}</code>${st.orderId ? ` · заказ <code>${st.orderId}</code>` : ''}`
+? `<span class="rest-compact">
+    <span class="rest-name">${st.restaurant.name ? st.restaurant.name : 'Restaurant'}</span>
+    <span class="rest-id"><code>${st.restaurant.id}</code></span>
+    ${st.orderId ? `<span class="rest-order">Заказ <code>${st.orderId}</code></span>` : ''}
+  </span>`
+
     : '';
   return `
     <div class="row" style="margin:8px 0;">
@@ -395,6 +408,33 @@ function openJsonDialog(obj) {
   dlg.showModal();
 }
 
+function formatApiError(err) {
+  const status = err?.status ?? err?.statusCode ?? err?.error?.status ?? err?.error?.statusCode;
+  const message = err?.error?.message || err?.message || err?.error?.title || err?.title;
+  const details = err?.error?.details || err?.details;
+  const readableByStatus = {
+    400: 'Некорректный запрос (400). Проверьте параметры.',
+    401: 'Неавторизовано (401). Проверьте токен/доступ.',
+    404: 'Не найдено (404). Проверьте идентификатор.',
+    422: 'Не прошло валидацию (422). Проверьте поля запроса.',
+    500: 'Ошибка сервера (500). Попробуйте позже.',
+  };
+
+  if (readableByStatus[status]) {
+    return {
+      status,
+      message: readableByStatus[status],
+      details: details || message || err,
+    };
+  }
+
+  return {
+    status,
+    message: message || 'Ошибка запроса',
+    details: details || err,
+  };
+}
+
 // ---- Screens ----
 function authScreen() {
   render(`
@@ -477,8 +517,10 @@ async function restaurantsScreen() {
         const ok = await tgConfirm(`Выбрать ресторан ${restaurantId}?`);
         if (!ok) return;
 
+        clearOrderId();
         saveRestaurant({ id: restaurantId, name: btn.textContent.trim() });
         window.appState.restaurant = { id: restaurantId, name: btn.textContent.trim() };
+        window.appState.orderId = null;
         setScreen('hub');
       };
     });
@@ -486,6 +528,7 @@ async function restaurantsScreen() {
     document.getElementById('logout').onclick = () => {
       clearAuth();
       clearRestaurant();
+      clearOrderId();
       clearCart();
       clearOrderId();
       window.appState.auth = null;
@@ -540,7 +583,7 @@ function hubScreen() {
   document.getElementById('changeRest').onclick = () => {
     window.appState.restaurant = null;
     clearRestaurant();
-      clearCart();
+    clearCart();
     clearOrderId();
     window.appState.orderId = '';
     window.appState.orderData = null;
@@ -553,7 +596,7 @@ function hubScreen() {
   document.getElementById('logout').onclick = () => {
     clearAuth();
     clearRestaurant();
-      clearCart();
+    clearCart();
     clearOrderId();
     window.appState.auth = null;
     window.appState.restaurant = null;
@@ -1329,6 +1372,16 @@ function cartScreen() {
       checkoutBtn.textContent = 'Отправляем...';
       const res = await createOrder(vv.payload);
       const id = res?.orderId || res?.id || res?.eatsId || '';
+      if (id) {
+      const res = await createOrder(vv.payload);
+      const id = res?.orderId || res?.id || res?.eatsId || '';
+      if (id) {
+        saveOrderId(id);
+        window.appState.orderId = id;
+      }
+
+        window.appState.orderId = id;
+      }
       try { tg().showPopup?.({ title: 'Отправлено', message: id ? `Заказ создан: ${id}` : 'Заказ создан успешно.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       window.appState.cart = { items: [] };
       saveCart(window.appState.cart);
@@ -1368,11 +1421,13 @@ async function ordersScreen() {
 
   render(`
     ${header('Заказы')}
+
     <div class="card">
       <div style="font-weight:700;margin-bottom:8px;">ID заказа</div>
       <div class="row" style="gap:8px;flex-wrap:wrap;">
-        <input id="orderIdInput" placeholder="Введите ID заказа" />
+        <input id="orderIdInput" placeholder="Введите ID заказа" value="${st.orderId || ''}" />
         <button id="saveOrderId" type="button">Сохранить</button>
+        ${st.orderId ? `<button id="clearOrderId" type="button">Очистить</button>` : ''}
       </div>
       <div class="muted" style="font-size:12px;margin-top:6px;">ID хранится локально и отображается рядом с рестораном.</div>
     </div>
@@ -1438,6 +1493,12 @@ async function ordersScreen() {
       </div>
     `}
 
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:700;margin-bottom:8px;">Ответ</div>
+      <pre id="ordersResponse" style="margin:0;background:#111;color:#eee;padding:12px;border-radius:12px;overflow:auto;max-height:60vh;font-size:12px;"></pre>
+    </div>
+  `);
+}
     <dialog id="jsonDialog">
       <div class="dlg">
         <div class="row" style="justify-content:space-between;align-items:center;">
@@ -1453,7 +1514,24 @@ async function ordersScreen() {
   wireBackButton();
 
   const orderIdInput = document.getElementById('orderIdInput');
+  const responseEl = document.getElementById('ordersResponse');
+
+  const setResponse = (data) => {
+    if (!responseEl) return;
+    responseEl.textContent = data ? JSON.stringify(data, null, 2) : '';
+  };
+
+  const setError = (err) => {
+    const info = formatApiError ? formatApiError(err) : { message: String(err) };
+    setResponse({
+      error: info.message || 'Ошибка',
+      status: info.status,
+      details: info.details,
+    });
+  };
+
   if (orderIdInput) orderIdInput.value = st.orderId || '';
+
   const saveOrderBtn = document.getElementById('saveOrderId');
   if (saveOrderBtn) {
     saveOrderBtn.onclick = () => {
@@ -1463,6 +1541,20 @@ async function ordersScreen() {
       st.orderData = null;
       st.orderDraft = null;
       st.orderDraftText = '';
+      setResponse(null);
+      rerender();
+    };
+  }
+
+  const clearOrderBtn = document.getElementById('clearOrderId');
+  if (clearOrderBtn) {
+    clearOrderBtn.onclick = () => {
+      st.orderId = '';
+      clearOrderId();
+      st.orderData = null;
+      st.orderDraft = null;
+      st.orderDraftText = '';
+      setResponse(null);
       rerender();
     };
   }
@@ -1481,9 +1573,11 @@ async function ordersScreen() {
       };
       try {
         cancelBtn.disabled = true;
-        await deleteOrder(st.orderId, payload);
+        const res = await deleteOrder(st.orderId, payload);
+        setResponse(res || { ok: true, action: 'deleteOrder' });
         try { tg().showPopup?.({ title: 'Успех', message: 'Заказ отменён.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       } catch (e) {
+        setError(e);
         const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
         try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       } finally {
@@ -1501,10 +1595,13 @@ async function ordersScreen() {
         st.orderData = data;
         st.orderDraft = cloneJson(data);
         st.orderDraftText = JSON.stringify(st.orderDraft, null, 2);
+        setResponse(data);
         rerender();
       } catch (e) {
+        setError(e);
         const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
         try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      } finally {
         fetchBtn.disabled = false;
       }
     };
@@ -1516,8 +1613,10 @@ async function ordersScreen() {
       try {
         statusBtn.disabled = true;
         const data = await getOrderStatus(st.orderId);
+        setResponse(data);
         openJsonDialog(data);
       } catch (e) {
+        setError(e);
         const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
         try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       } finally {
@@ -1545,6 +1644,7 @@ async function ordersScreen() {
         const parsed = JSON.parse(st.orderDraftText || '');
         st.orderDraft = parsed;
         st.orderDraftText = JSON.stringify(parsed, null, 2);
+        setResponse(parsed);
         rerender();
       } catch (e) {
         const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Некорректный JSON';
@@ -1559,15 +1659,18 @@ async function ordersScreen() {
       try {
         const parsed = JSON.parse(st.orderDraftText || '');
         updateBtn.disabled = true;
-        await updateOrder(st.orderId, parsed);
+        const res = await updateOrder(st.orderId, parsed);
         st.orderData = cloneJson(parsed);
         st.orderDraft = cloneJson(parsed);
         st.orderDraftText = JSON.stringify(parsed, null, 2);
+        setResponse(res || parsed);
         try { tg().showPopup?.({ title: 'Успех', message: 'Заказ обновлён.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
         rerender();
       } catch (e) {
+        setError(e);
         const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
         try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      } finally {
         updateBtn.disabled = false;
       }
     };
@@ -1785,6 +1888,7 @@ function bootstrap() {
   // initial state hydration
   window.appState.auth = loadAuth();
   window.appState.restaurant = loadRestaurant();
+  window.appState.orderId = loadOrderId();
   window.appState.cart = loadCart();
   window.appState.orderId = loadOrderId();
   window.appState.screen = window.appState.auth?.accessToken ? (window.appState.restaurant?.id ? 'hub' : 'restaurants') : 'auth';
