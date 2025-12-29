@@ -1,1 +1,1 @@
-# sm3
+STEP 10 v5 — AUTH_EXPIRED handling
