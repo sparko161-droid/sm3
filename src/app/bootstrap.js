@@ -1620,8 +1620,7 @@ async function ordersScreen() {
       <div style="font-weight:700;margin-bottom:8px;">Ответ</div>
       <pre id="ordersResponse" style="margin:0;background:#111;color:#eee;padding:12px;border-radius:12px;overflow:auto;max-height:60vh;font-size:12px;"></pre>
     </div>
-  `);
-}
+
     <dialog id="jsonDialog">
       <div class="dlg">
         <div class="row" style="justify-content:space-between;align-items:center;">
