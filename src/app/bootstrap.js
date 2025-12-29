@@ -1102,6 +1102,17 @@ function cartScreen() {
     ` : `
       <div class="muted">Корзина пуста.</div>
     `}
+
+    <dialog id="jsonDialog">
+      <div class="dlg">
+        <div class="row" style="justify-content:space-between;align-items:center;">
+          <div style="font-weight:650;">JSON</div>
+          <form method="dialog"><button type="submit">Закрыть</button></form>
+        </div>
+        <div class="hr"></div>
+        <pre id="jsonPre"></pre>
+      </div>
+    </dialog>
   `);
 
   wireBackButton();
