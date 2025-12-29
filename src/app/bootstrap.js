@@ -1019,7 +1019,7 @@ function buildOrderPayload() {
       }
     },
     paymentInfo: {
-      paymentType: "CARD",
+      paymentType: "CASH",
       itemsCost: itemsCost,
       deliveryFee: deliveryFee,
       change: change,
