@@ -242,18 +242,18 @@ function tgConfirm(message) {
 }
 
 // ---- Menu helpers ----
-function normalizeMenuResponse(raw) {
-  const unwrap = (v) => {
-    if (v == null) return null;
-    if (typeof v === 'string') return JSON.parse(v);
-    return v;
-  };
+function unwrapJsonPayload(value) {
+  if (value == null) return null;
+  if (typeof value === 'string') return JSON.parse(value);
+  return value;
+}
 
-  const outer = unwrap(raw);
+function normalizeMenuResponse(raw) {
+  const outer = unwrapJsonPayload(raw);
   if (!outer) return { categories: [], items: [], lastChange: null };
 
   if (outer.data != null) {
-    const inner = unwrap(outer.data);
+    const inner = unwrapJsonPayload(outer.data);
     return {
       categories: Array.isArray(inner?.categories) ? inner.categories : [],
       items: Array.isArray(inner?.items) ? inner.items : [],
@@ -269,17 +269,11 @@ function normalizeMenuResponse(raw) {
 }
 
 function normalizeAvailabilityResponse(raw) {
-  const unwrap = (v) => {
-    if (v == null) return null;
-    if (typeof v === 'string') return JSON.parse(v);
-    return v;
-  };
-
-  const outer = unwrap(raw);
+  const outer = unwrapJsonPayload(raw);
   if (!outer) return { items: [], modifiers: [] };
 
   if (outer.data != null) {
-    const inner = unwrap(outer.data);
+    const inner = unwrapJsonPayload(outer.data);
     return {
       items: Array.isArray(inner?.items) ? inner.items : [],
       modifiers: Array.isArray(inner?.modifiers) ? inner.modifiers : [],
