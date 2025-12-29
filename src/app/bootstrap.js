@@ -127,12 +127,19 @@ function goBack() {
 function header(title) {
   const st = window.appState;
   const showBack = st.screen !== 'auth' && st.history.length > 0;
+  const showCart = st.screen === 'menu';
+  const restaurantInfo = (st.restaurant?.id && st.screen !== 'auth' && st.screen !== 'restaurants')
+    ? `${st.restaurant.name ? st.restaurant.name : 'Restaurant'} · <code>${st.restaurant.id}</code>`
+    : '';
   return `
     <div class="row" style="margin:8px 0;">
       ${showBack ? `<button id="backBtn" type="button">← Назад</button>` : ''}
       <div style="font-weight:650;">${title}</div>
-      <div style="margin-left:auto;font-size:12px;opacity:.7;">
-        ${(st.restaurant?.id && st.screen !== 'auth' && st.screen !== 'restaurants') ? `${st.restaurant.name ? st.restaurant.name : 'Restaurant'} · <code>${st.restaurant.id}</code>` : ''}
+      <div style="margin-left:auto;display:flex;gap:8px;align-items:center;">
+        ${showCart ? `<button id="goCart" type="button">🛒 Корзина</button>` : ''}
+        <div style="font-size:12px;opacity:.7;">
+          ${restaurantInfo}
+        </div>
       </div>
     </div>
     <div class="hr"></div>
@@ -579,6 +586,8 @@ async function menuScreen() {
     `);
 
     wireBackButton();
+    const goCart = document.getElementById('goCart');
+    if (goCart) goCart.onclick = () => setScreen('cart');
 
     const root = document.getElementById('menuRoot');
 
