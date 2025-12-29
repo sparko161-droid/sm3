@@ -54,6 +54,8 @@ function ensureStyles() {
     .menu-meta{display:flex;justify-content:space-between;gap:8px;font-size:12px;align-items:center;}
     .badge{font-size:12px;color:#777;background:#f1f1f1;padding:6px 8px;border-radius:999px;display:inline-block;}
     .menu-card.is-disabled{opacity:.45;filter:grayscale(1);}
+    .field{display:flex;flex-direction:column;gap:4px;font-size:12px;color:#111;}
+    .field-label{font-weight:600;font-size:12px;}
     
     #restaurantBadge{position:fixed;top:10px;right:12px;z-index:1000;display:none;}
     .rest-badge{background:#f4f4f5;border-radius:10px;padding:6px 10px;font-size:12px;line-height:1.2;text-align:right;box-shadow:0 2px 6px rgba(0,0,0,.08);}
@@ -1073,17 +1075,41 @@ function cartScreen() {
       <div class="card" style="margin-top:12px;">
         <div style="font-weight:700;margin-bottom:8px;">Доставка</div>
         <div class="row" style="gap:8px;flex-wrap:wrap;">
-          <input id="addrFull" placeholder="Адрес (full)" style="flex:1;min-width:220px;" />
-          <input id="addrLat" placeholder="latitude" style="width:140px;" />
-          <input id="addrLon" placeholder="longitude" style="width:140px;" />
+          <label class="field" style="flex:1;min-width:220px;">
+            <span class="field-label">Адрес</span>
+            <input id="addrFull" placeholder="" />
+          </label>
+          <label class="field" style="width:140px;">
+            <span class="field-label">Широта</span>
+            <input id="addrLat" placeholder="" />
+          </label>
+          <label class="field" style="width:140px;">
+            <span class="field-label">Долгота</span>
+            <input id="addrLon" placeholder="" />
+          </label>
         </div>
         <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
-          <input id="persons" type="number" min="0" placeholder="persons" style="width:120px;" />
-          <input id="deliveryFee" type="number" min="0" placeholder="deliveryFee" style="width:140px;" />
-          <input id="change" type="number" min="0" placeholder="change" style="width:120px;" />
-          <input id="eatsId" placeholder="eatsId (опц.)" style="width:160px;" />
+          <label class="field" style="width:120px;">
+            <span class="field-label">Количество персон</span>
+            <input id="persons" type="number" min="0" placeholder="" />
+          </label>
+          <label class="field" style="width:140px;">
+            <span class="field-label">Стоимость доставки</span>
+            <input id="deliveryFee" type="number" min="0" placeholder="" />
+          </label>
+          <label class="field" style="width:120px;">
+            <span class="field-label">Сдача</span>
+            <input id="change" type="number" min="0" placeholder="" />
+          </label>
+          <label class="field" style="width:160px;">
+            <span class="field-label">Eats ID (опционально)</span>
+            <input id="eatsId" placeholder="" />
+          </label>
         </div>
-        <textarea id="comment" placeholder="Комментарий" style="margin-top:8px;width:100%;min-height:64px;"></textarea>
+        <label class="field" style="margin-top:8px;">
+          <span class="field-label">Комментарий</span>
+          <textarea id="comment" placeholder="" style="width:100%;min-height:64px;"></textarea>
+        </label>
         <div class="muted" style="font-size:12px;margin-top:6px;">deliveryDate = текущее локальное время +2 часа.</div>
       </div>
 
