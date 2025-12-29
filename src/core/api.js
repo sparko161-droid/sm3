@@ -60,6 +60,6 @@ export const getOrderStatus = (orderId) => {
   return req({
     method: 'GET',
     url: `${baseUrl}/order/${orderId}/status`,
-    headers: { Timeout: 2 }
+    timeout: 2000, // таймаут 2 секунды
   });
 };

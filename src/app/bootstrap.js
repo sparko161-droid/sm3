@@ -10,7 +10,16 @@ import {
   saveCart,
   clearCart,
 } from '../core/storage.js';
-import { getRestaurants, getMenuComposition, getAvailability, createOrder } from '../core/api.js';
+import {
+  getRestaurants,
+  getMenuComposition,
+  getAvailability,
+  createOrder,
+  getOrder,
+  deleteOrder,
+  updateOrder,
+  getOrderStatus,
+} from '../core/api.js';
 
 const app = document.getElementById('app');
 const render = (html) => (app.innerHTML = html);
@@ -383,6 +392,33 @@ function openJsonDialog(obj) {
   dlg.showModal();
 }
 
+function formatApiError(err) {
+  const status = err?.status ?? err?.statusCode ?? err?.error?.status ?? err?.error?.statusCode;
+  const message = err?.error?.message || err?.message || err?.error?.title || err?.title;
+  const details = err?.error?.details || err?.details;
+  const readableByStatus = {
+    400: 'Некорректный запрос (400). Проверьте параметры.',
+    401: 'Неавторизовано (401). Проверьте токен/доступ.',
+    404: 'Не найдено (404). Проверьте идентификатор.',
+    422: 'Не прошло валидацию (422). Проверьте поля запроса.',
+    500: 'Ошибка сервера (500). Попробуйте позже.',
+  };
+
+  if (readableByStatus[status]) {
+    return {
+      status,
+      message: readableByStatus[status],
+      details: details || message || err,
+    };
+  }
+
+  return {
+    status,
+    message: message || 'Ошибка запроса',
+    details: details || err,
+  };
+}
+
 // ---- Screens ----
 function authScreen() {
   render(`
@@ -499,7 +535,7 @@ function hubScreen() {
       <button id="goMenu">🍽 Меню</button>
       <button id="goAvail">🚫 Недоступные позиции</button>
       <button id="goCart">🛒 Корзина <span class="badge" id="cartCountBadge"></span></button>
-      <button disabled>🧾 Заказы (скоро)</button>
+      <button id="goOrders">🧾 Заказы</button>
       <button disabled>➕ Создание заказа (позже)</button>
     </div>
 
@@ -513,6 +549,7 @@ function hubScreen() {
 
   document.getElementById('goMenu').onclick = () => setScreen('menu');
   document.getElementById('goAvail').onclick = () => setScreen('availability');
+  document.getElementById('goOrders').onclick = () => setScreen('orders');
   const cc = cartCount();
   const b = document.getElementById('cartCountBadge');
   if (b) b.textContent = cc ? String(cc) : '';
@@ -1252,6 +1289,191 @@ function cartScreen() {
   if (clearBtn) clearBtn.onclick = () => { st.cart = { items: [] }; saveCart(st.cart); rerender(); };
 }
 
+function ordersScreen() {
+  render(`
+    ${header('Заказы')}
+    <div class="card">
+      <label class="field">
+        <span class="field-label">Order ID</span>
+        <input id="orderIdInput" placeholder="Введите Order ID" />
+      </label>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:700;margin-bottom:8px;">Получить актуальную информацию</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;">
+        <button id="getOrderBtn" type="button">Получить актуальную информацию</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:700;margin-bottom:8px;">Отменить заказ</div>
+      <label class="field">
+        <span class="field-label">Eats ID</span>
+        <input id="deleteEatsId" placeholder="eatsId" />
+      </label>
+      <label class="field" style="margin-top:8px;">
+        <span class="field-label">Комментарий</span>
+        <textarea id="deleteComment" placeholder="Комментарий" style="width:100%;min-height:72px;"></textarea>
+      </label>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button id="deleteOrderBtn" type="button">Отменить заказ</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:700;margin-bottom:8px;">Обновить заказ</div>
+      <label class="field">
+        <span class="field-label">JSON payload</span>
+        <textarea id="updatePayload" placeholder='{"field":"value"}' style="width:100%;min-height:140px;"></textarea>
+      </label>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
+        <button id="updateOrderBtn" type="button">Обновить заказ</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:700;margin-bottom:8px;">Получить статус</div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;">
+        <button id="getStatusBtn" type="button">Получить статус</button>
+      </div>
+    </div>
+
+    <div class="card" style="margin-top:12px;">
+      <div style="font-weight:700;margin-bottom:8px;">Ответ</div>
+      <pre id="ordersResponse" style="margin:0;background:#111;color:#eee;padding:12px;border-radius:12px;overflow:auto;max-height:60vh;font-size:12px;"></pre>
+    </div>
+
+    <dialog id="jsonDialog">
+      <div class="dlg">
+        <div class="row" style="justify-content:space-between;align-items:center;">
+          <div style="font-weight:650;">JSON</div>
+          <form method="dialog"><button type="submit">Закрыть</button></form>
+        </div>
+        <div class="hr"></div>
+        <pre id="jsonPre"></pre>
+      </div>
+    </dialog>
+  `);
+
+  wireBackButton();
+
+  const st = window.appState;
+  st.orderOps ||= {};
+  const ops = st.orderOps;
+
+  const orderIdInput = document.getElementById('orderIdInput');
+  const deleteEatsId = document.getElementById('deleteEatsId');
+  const deleteComment = document.getElementById('deleteComment');
+  const updatePayload = document.getElementById('updatePayload');
+  const responseEl = document.getElementById('ordersResponse');
+
+  if (orderIdInput) orderIdInput.value = ops.orderId || '';
+  if (deleteEatsId) deleteEatsId.value = ops.deleteEatsId || '';
+  if (deleteComment) deleteComment.value = ops.deleteComment || '';
+  if (updatePayload) updatePayload.value = ops.updatePayload || '';
+
+  const setResponse = (data) => {
+    if (!responseEl) return;
+    responseEl.textContent = data ? JSON.stringify(data, null, 2) : '';
+  };
+
+  const setError = (err) => {
+    const info = formatApiError(err);
+    setResponse({
+      error: info.message,
+      status: info.status,
+      details: info.details,
+    });
+  };
+
+  const requireOrderId = () => {
+    const orderId = (orderIdInput?.value || '').trim();
+    if (!orderId) {
+      setResponse({ error: 'Нужно указать Order ID.' });
+      return null;
+    }
+    return orderId;
+  };
+
+  if (orderIdInput) orderIdInput.oninput = () => { ops.orderId = orderIdInput.value; };
+  if (deleteEatsId) deleteEatsId.oninput = () => { ops.deleteEatsId = deleteEatsId.value; };
+  if (deleteComment) deleteComment.oninput = () => { ops.deleteComment = deleteComment.value; };
+  if (updatePayload) updatePayload.oninput = () => { ops.updatePayload = updatePayload.value; };
+
+  const getOrderBtn = document.getElementById('getOrderBtn');
+  if (getOrderBtn) {
+    getOrderBtn.onclick = async () => {
+      const orderId = requireOrderId();
+      if (!orderId) return;
+      try {
+        const res = await getOrder(orderId);
+        setResponse(res);
+      } catch (err) {
+        setError(err);
+      }
+    };
+  }
+
+  const deleteOrderBtn = document.getElementById('deleteOrderBtn');
+  if (deleteOrderBtn) {
+    deleteOrderBtn.onclick = async () => {
+      const orderId = requireOrderId();
+      if (!orderId) return;
+      const payload = {
+        eatsId: (deleteEatsId?.value || '').trim(),
+        comment: (deleteComment?.value || '').trim(),
+      };
+      try {
+        const res = await deleteOrder(orderId, payload);
+        setResponse(res);
+      } catch (err) {
+        setError(err);
+      }
+    };
+  }
+
+  const updateOrderBtn = document.getElementById('updateOrderBtn');
+  if (updateOrderBtn) {
+    updateOrderBtn.onclick = async () => {
+      const orderId = requireOrderId();
+      if (!orderId) return;
+      const raw = (updatePayload?.value || '').trim();
+      if (!raw) {
+        setResponse({ error: 'Нужно указать JSON payload для обновления.' });
+        return;
+      }
+      let payload;
+      try {
+        payload = JSON.parse(raw);
+      } catch (err) {
+        setResponse({ error: 'Некорректный JSON: не удалось распарсить.' });
+        return;
+      }
+      try {
+        const res = await updateOrder(orderId, payload);
+        setResponse(res);
+      } catch (err) {
+        setError(err);
+      }
+    };
+  }
+
+  const getStatusBtn = document.getElementById('getStatusBtn');
+  if (getStatusBtn) {
+    getStatusBtn.onclick = async () => {
+      const orderId = requireOrderId();
+      if (!orderId) return;
+      try {
+        const res = await getOrderStatus(orderId);
+        setResponse(res);
+      } catch (err) {
+        setError(err);
+      }
+    };
+  }
+}
+
 async function availabilityScreen() {
   const st = window.appState;
   if (!st.restaurant?.id) {
@@ -1384,6 +1606,7 @@ function rerender() {
   if (st.screen === 'menu') return menuScreen();
   if (st.screen === 'availability') return availabilityScreen();
   if (st.screen === 'cart') return cartScreen();
+  if (st.screen === 'orders') return ordersScreen();
 
   // fallback
   st.screen = 'auth';
