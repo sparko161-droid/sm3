@@ -6,6 +6,9 @@ import {
   loadRestaurant,
   saveRestaurant,
   clearRestaurant,
+  loadOrderId,
+  saveOrderId,
+  clearOrderId,
   loadCart,
   saveCart,
   clearCart,
@@ -20,6 +23,7 @@ window.appState ||= {
   auth: null,          // { baseUrl, clientId, clientSecret, accessToken }
   restaurant: null,    // { id, name }
   cart: { items: [] },  // [{ key, itemId, name, qty, basePrice, modifiers: [{id,name,price,amount}], totalPrice }]
+  orderId: loadOrderId(),
   screen: 'auth',      // auth | restaurants | hub | menu | availability | cart
   history: [],         // stack of previous screens for Back
 };
@@ -456,8 +460,10 @@ async function restaurantsScreen() {
         const ok = await tgConfirm(`Выбрать ресторан ${restaurantId}?`);
         if (!ok) return;
 
+        clearOrderId();
         saveRestaurant({ id: restaurantId, name: btn.textContent.trim() });
         window.appState.restaurant = { id: restaurantId, name: btn.textContent.trim() };
+        window.appState.orderId = null;
         setScreen('hub');
       };
     });
@@ -465,9 +471,11 @@ async function restaurantsScreen() {
     document.getElementById('logout').onclick = () => {
       clearAuth();
       clearRestaurant();
+      clearOrderId();
       clearCart();
       window.appState.auth = null;
       window.appState.restaurant = null;
+      window.appState.orderId = null;
       window.appState.history = [];
       setScreen('auth', { pushHistory: false });
     };
@@ -513,7 +521,9 @@ function hubScreen() {
   document.getElementById('changeRest').onclick = () => {
     window.appState.restaurant = null;
     clearRestaurant();
-      clearCart();
+    clearOrderId();
+    clearCart();
+    window.appState.orderId = null;
     window.appState.history = [];
     setScreen('restaurants', { pushHistory: false });
   };
@@ -521,9 +531,11 @@ function hubScreen() {
   document.getElementById('logout').onclick = () => {
     clearAuth();
     clearRestaurant();
-      clearCart();
+    clearOrderId();
+    clearCart();
     window.appState.auth = null;
     window.appState.restaurant = null;
+    window.appState.orderId = null;
     window.appState.history = [];
     setScreen('auth', { pushHistory: false });
   };
@@ -1210,6 +1222,10 @@ function cartScreen() {
       checkoutBtn.textContent = 'Отправляем...';
       const res = await createOrder(vv.payload);
       const id = res?.orderId || res?.id || res?.eatsId || '';
+      if (id) {
+        saveOrderId(id);
+        window.appState.orderId = id;
+      }
       try { tg().showPopup?.({ title: 'Отправлено', message: id ? `Заказ создан: ${id}` : 'Заказ создан успешно.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       window.appState.cart = { items: [] };
       saveCart(window.appState.cart);
@@ -1389,6 +1405,7 @@ function bootstrap() {
   // initial state hydration
   window.appState.auth = loadAuth();
   window.appState.restaurant = loadRestaurant();
+  window.appState.orderId = loadOrderId();
   window.appState.cart = loadCart();
   window.appState.screen = window.appState.auth?.accessToken ? (window.appState.restaurant?.id ? 'hub' : 'restaurants') : 'auth';
 
