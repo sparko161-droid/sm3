@@ -12,9 +12,6 @@ import {
   loadCart,
   saveCart,
   clearCart,
-  loadOrderId,
-  saveOrderId,
-  clearOrderId,
 } from '../core/storage.js';
 import {
   getRestaurants,
