@@ -1050,7 +1050,7 @@ function cartScreen() {
     ${items.length ? `
       <div class="list">
         ${items.map((x) => {
-          const mods = (x.modifiers || []).map(m => `${m.name}${m.amount > 1 ? ` ×${m.amount}` : ''}${m.price ? ` (+${rub(m.price * (m.amount||1))})` : ''}`).join(', ');
+          const mods = (x.modifications || []).map(m => `${m.name}${m.quantity > 1 ? ` ×${m.quantity}` : ''}${m.price ? ` (+${rub(m.price * (m.quantity||1))})` : ''}`).join(', ');
           return `
             <div class="card">
               <div class="row" style="align-items:flex-start;gap:10px;">
