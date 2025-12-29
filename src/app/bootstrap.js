@@ -19,6 +19,7 @@ const render = (html) => (app.innerHTML = html);
 window.appState ||= {
   auth: null,          // { baseUrl, clientId, clientSecret, accessToken }
   restaurant: null,    // { id, name }
+  orderId: null,       // last created order id
   cart: { items: [] },  // [{ key, itemId, name, qty, basePrice, modifiers: [{id,name,price,amount}], totalPrice }]
   screen: 'auth',      // auth | restaurants | hub | menu | availability | cart
   history: [],         // stack of previous screens for Back
@@ -59,6 +60,9 @@ function ensureStyles() {
     
     #restaurantBadge{position:fixed;top:10px;right:12px;z-index:1000;display:none;}
     .rest-badge{background:#f4f4f5;border-radius:10px;padding:6px 10px;font-size:12px;line-height:1.2;text-align:right;box-shadow:0 2px 6px rgba(0,0,0,.08);}
+    .rest-compact{display:inline-flex;flex-wrap:wrap;gap:6px;align-items:center;background:#f4f4f5;border-radius:10px;padding:4px 8px;line-height:1.2;}
+    .rest-compact code{font-size:11px;}
+    .rest-order{white-space:nowrap;}
     .rest-name{font-weight:650;}
     .rest-id{opacity:.65;}
     .itemDlgHead{display:flex;gap:12px;align-items:flex-start;}
@@ -130,8 +134,13 @@ function header(title) {
   const st = window.appState;
   const showBack = st.screen !== 'auth' && st.history.length > 0;
   const showCart = st.screen === 'menu';
+  const orderId = st.orderId || st.order?.orderId || st.order?.id || '';
   const restaurantInfo = (st.restaurant?.id && st.screen !== 'auth' && st.screen !== 'restaurants')
-    ? `${st.restaurant.name ? st.restaurant.name : 'Restaurant'} · <code>${st.restaurant.id}</code>`
+    ? `<span class="rest-compact">
+        <span class="rest-name">${st.restaurant.name ? st.restaurant.name : 'Restaurant'}</span>
+        <span class="rest-id"><code>${st.restaurant.id}</code></span>
+        ${orderId ? `<span class="rest-order">Заказ <code>${orderId}</code></span>` : ''}
+      </span>`
     : '';
   return `
     <div class="row" style="margin:8px 0;">
@@ -1210,6 +1219,9 @@ function cartScreen() {
       checkoutBtn.textContent = 'Отправляем...';
       const res = await createOrder(vv.payload);
       const id = res?.orderId || res?.id || res?.eatsId || '';
+      if (id) {
+        window.appState.orderId = id;
+      }
       try { tg().showPopup?.({ title: 'Отправлено', message: id ? `Заказ создан: ${id}` : 'Заказ создан успешно.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       window.appState.cart = { items: [] };
       saveCart(window.appState.cart);
