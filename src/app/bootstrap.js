@@ -12,6 +12,9 @@ import {
   loadCart,
   saveCart,
   clearCart,
+  loadOrderId,
+  saveOrderId,
+  clearOrderId,
 } from '../core/storage.js';
 import {
   getRestaurants,
@@ -33,6 +36,9 @@ window.appState ||= {
   restaurant: null,    // { id, name }
   orderId: null,       // last created order id
   cart: { items: [] },  // [{ key, itemId, name, qty, basePrice, modifiers: [{id,name,price,amount}], totalPrice }]
+  orderData: null,
+  orderDraft: null,
+  orderDraftText: '',
   orderId: loadOrderId(),
   screen: 'auth',      // auth | restaurants | hub | menu | availability | cart
   history: [],         // stack of previous screens for Back
@@ -113,6 +119,11 @@ dialog{border:none;border-radius:16px;padding:0;max-width:92vw;width:900px;}
     .hr{height:1px;background:#eee;margin:10px 0;}
     .dlgActions{position:sticky;bottom:0;display:flex;gap:10px;justify-content:flex-end;align-items:center;padding:10px 0 0;margin-top:12px;background:linear-gradient(to top, #fff 75%, rgba(255,255,255,0));}
     .dlgActions button{padding:10px 14px;border-radius:14px;}
+    .order-items{display:flex;flex-direction:column;gap:10px;}
+    .order-item{border:1px solid #eee;border-radius:12px;padding:10px;background:#fff;}
+    .order-item .row{align-items:flex-start;}
+    .order-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;}
+    @media (max-width:600px){.order-grid{grid-template-columns:1fr;}}
 
   `;
   document.head.appendChild(el);
@@ -149,11 +160,12 @@ function header(title) {
   const showCart = st.screen === 'menu';
   const orderId = st.orderId || st.order?.orderId || st.order?.id || '';
   const restaurantInfo = (st.restaurant?.id && st.screen !== 'auth' && st.screen !== 'restaurants')
-    ? `<span class="rest-compact">
-        <span class="rest-name">${st.restaurant.name ? st.restaurant.name : 'Restaurant'}</span>
-        <span class="rest-id"><code>${st.restaurant.id}</code></span>
-        ${orderId ? `<span class="rest-order">Заказ <code>${orderId}</code></span>` : ''}
-      </span>`
+? `<span class="rest-compact">
+    <span class="rest-name">${st.restaurant.name ? st.restaurant.name : 'Restaurant'}</span>
+    <span class="rest-id"><code>${st.restaurant.id}</code></span>
+    ${st.orderId ? `<span class="rest-order">Заказ <code>${st.orderId}</code></span>` : ''}
+  </span>`
+
     : '';
   return `
     <div class="row" style="margin:8px 0;">
@@ -518,9 +530,13 @@ async function restaurantsScreen() {
       clearRestaurant();
       clearOrderId();
       clearCart();
+      clearOrderId();
       window.appState.auth = null;
       window.appState.restaurant = null;
-      window.appState.orderId = null;
+      window.appState.orderId = '';
+      window.appState.orderData = null;
+      window.appState.orderDraft = null;
+      window.appState.orderDraftText = '';
       window.appState.history = [];
       setScreen('auth', { pushHistory: false });
     };
@@ -567,9 +583,12 @@ function hubScreen() {
   document.getElementById('changeRest').onclick = () => {
     window.appState.restaurant = null;
     clearRestaurant();
-    clearOrderId();
     clearCart();
-    window.appState.orderId = null;
+    clearOrderId();
+    window.appState.orderId = '';
+    window.appState.orderData = null;
+    window.appState.orderDraft = null;
+    window.appState.orderDraftText = '';
     window.appState.history = [];
     setScreen('restaurants', { pushHistory: false });
   };
@@ -577,11 +596,14 @@ function hubScreen() {
   document.getElementById('logout').onclick = () => {
     clearAuth();
     clearRestaurant();
-    clearOrderId();
     clearCart();
+    clearOrderId();
     window.appState.auth = null;
     window.appState.restaurant = null;
-    window.appState.orderId = null;
+    window.appState.orderId = '';
+    window.appState.orderData = null;
+    window.appState.orderDraft = null;
+    window.appState.orderDraftText = '';
     window.appState.history = [];
     setScreen('auth', { pushHistory: false });
   };
@@ -1022,6 +1044,10 @@ function safeStr(v, fallback = '') {
   return fallback;
 }
 
+function escAttr(v) {
+  return safeStr(v, '').replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
 function safeNum(v, fallback = 0) {
   if (v === null || v === undefined) return fallback;
   if (typeof v === 'number') return Number.isFinite(v) ? v : fallback;
@@ -1099,6 +1125,84 @@ function buildOrderPayload() {
     comment: (f.comment || '').trim(),
     promos: []
   };
+}
+
+function cloneJson(obj) {
+  return obj ? JSON.parse(JSON.stringify(obj)) : obj;
+}
+
+function renderOrderCard(order) {
+  if (!order) return '';
+  const items = Array.isArray(order.items) ? order.items : [];
+  const delivery = order.deliveryInfo || {};
+  const addr = delivery.deliveryAddress || {};
+  const payment = order.paymentInfo || {};
+  const eatsId = safeStr(order.eatsId, '');
+  const id = safeStr(order.id || order.orderId, '');
+  const status = safeStr(order.status, '');
+  const deliveryDate = safeStr(delivery.deliveryDate, '');
+  const clientName = safeStr(delivery.clientName, '');
+  const phone = safeStr(delivery.phoneNumber, '');
+  const addressFull = safeStr(addr.full, '');
+  return `
+    <div class="card">
+      <div class="row" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="font-weight:700;">Карточка заказа</div>
+        <span class="badge">items: ${items.length}</span>
+      </div>
+      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:6px;">
+        ${id ? `<span class="badge">id: ${id}</span>` : ''}
+        ${eatsId ? `<span class="badge">eatsId: ${eatsId}</span>` : ''}
+        ${status ? `<span class="badge">status: ${status}</span>` : ''}
+      </div>
+      <div style="margin-top:10px;" class="order-grid">
+        <div>
+          <div class="muted" style="font-size:12px;">Доставка</div>
+          <div style="font-weight:650;">${addressFull || '—'}</div>
+          <div class="muted" style="font-size:12px;">${clientName ? `${clientName} · ` : ''}${phone}</div>
+          <div class="muted" style="font-size:12px;">${deliveryDate}</div>
+        </div>
+        <div>
+          <div class="muted" style="font-size:12px;">Оплата</div>
+          <div class="row" style="justify-content:space-between;">
+            <span class="muted">items</span><b>${rub(payment.itemsCost)}</b>
+          </div>
+          <div class="row" style="justify-content:space-between;">
+            <span class="muted">delivery</span><b>${rub(payment.deliveryFee)}</b>
+          </div>
+          <div class="row" style="justify-content:space-between;">
+            <span class="muted">total</span><b>${rub(payment.total)}</b>
+          </div>
+        </div>
+      </div>
+      <div style="margin-top:12px;" class="order-items">
+        ${items.map((it) => {
+          const mods = (it.modifications || []).map((m) => `${safeStr(m.name, m.id)} ×${safeNum(m.quantity, 1)}`).join(', ');
+          const qty = safeNum(it.quantity, 1);
+          const price = safeNum(it.price, 0);
+          return `
+            <div class="order-item">
+              <div class="row" style="justify-content:space-between;gap:10px;">
+                <div>
+                  <div style="font-weight:650;">${safeStr(it.name, it.id)}</div>
+                  <div class="muted" style="font-size:12px;">id: <code>${safeStr(it.id, '')}</code></div>
+                  ${mods ? `<div class="muted" style="font-size:12px;margin-top:4px;">${mods}</div>` : ''}
+                </div>
+                <div style="text-align:right;">
+                  <div class="muted" style="font-size:12px;">${qty} × ${rub(price)}</div>
+                  <div style="font-weight:700;">${rub(qty * price)}</div>
+                </div>
+              </div>
+            </div>
+          `;
+        }).join('') || `<div class="muted">Позиции отсутствуют.</div>`}
+      </div>
+      <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap;">
+        <button id="orderJsonBtn" type="button">JSON заказа</button>
+        <button id="orderJsonDownloadBtn" type="button">Скачать JSON</button>
+      </div>
+    </div>
+  `;
 }
 
 function cartScreen() {
@@ -1308,61 +1412,93 @@ function cartScreen() {
   if (clearBtn) clearBtn.onclick = () => { st.cart = { items: [] }; saveCart(st.cart); rerender(); };
 }
 
-function ordersScreen() {
+async function ordersScreen() {
+  const st = window.appState;
+  if (!st.restaurant?.id) {
+    setScreen('restaurants', { pushHistory: false });
+    return;
+  }
+
   render(`
     ${header('Заказы')}
+
     <div class="card">
-      <label class="field">
-        <span class="field-label">Order ID</span>
-        <input id="orderIdInput" placeholder="Введите Order ID" />
-      </label>
-    </div>
-
-    <div class="card" style="margin-top:12px;">
-      <div style="font-weight:700;margin-bottom:8px;">Получить актуальную информацию</div>
+      <div style="font-weight:700;margin-bottom:8px;">ID заказа</div>
       <div class="row" style="gap:8px;flex-wrap:wrap;">
-        <button id="getOrderBtn" type="button">Получить актуальную информацию</button>
+        <input id="orderIdInput" placeholder="Введите ID заказа" value="${st.orderId || ''}" />
+        <button id="saveOrderId" type="button">Сохранить</button>
+        ${st.orderId ? `<button id="clearOrderId" type="button">Очистить</button>` : ''}
       </div>
+      <div class="muted" style="font-size:12px;margin-top:6px;">ID хранится локально и отображается рядом с рестораном.</div>
     </div>
 
-    <div class="card" style="margin-top:12px;">
-      <div style="font-weight:700;margin-bottom:8px;">Отменить заказ</div>
-      <label class="field">
-        <span class="field-label">Eats ID</span>
-        <input id="deleteEatsId" placeholder="eatsId" />
-      </label>
-      <label class="field" style="margin-top:8px;">
-        <span class="field-label">Комментарий</span>
-        <textarea id="deleteComment" placeholder="Комментарий" style="width:100%;min-height:72px;"></textarea>
-      </label>
-      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
-        <button id="deleteOrderBtn" type="button">Отменить заказ</button>
+    ${st.orderId ? `
+      <div class="card" style="margin-top:12px;">
+        <div style="font-weight:700;margin-bottom:8px;">Действия</div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <button id="fetchOrderBtn" type="button">Получить заказ</button>
+          <button id="fetchStatusBtn" type="button">Получить статус</button>
+        </div>
       </div>
-    </div>
 
-    <div class="card" style="margin-top:12px;">
-      <div style="font-weight:700;margin-bottom:8px;">Обновить заказ</div>
-      <label class="field">
-        <span class="field-label">JSON payload</span>
-        <textarea id="updatePayload" placeholder='{"field":"value"}' style="width:100%;min-height:140px;"></textarea>
-      </label>
-      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
-        <button id="updateOrderBtn" type="button">Обновить заказ</button>
+      <div class="card" style="margin-top:12px;">
+        <div style="font-weight:700;margin-bottom:8px;">Отмена заказа</div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <label class="field" style="flex:1;min-width:200px;">
+            <span class="field-label">Eats ID</span>
+            <input id="cancelEatsId" placeholder="190330-123456" />
+          </label>
+          <label class="field" style="flex:2;min-width:260px;">
+            <span class="field-label">Комментарий</span>
+            <input id="cancelComment" placeholder="Отказ клиента" />
+          </label>
+        </div>
+        <div class="row" style="gap:8px;margin-top:8px;">
+          <button id="cancelOrderBtn" type="button">Отменить заказ</button>
+        </div>
       </div>
-    </div>
 
-    <div class="card" style="margin-top:12px;">
-      <div style="font-weight:700;margin-bottom:8px;">Получить статус</div>
-      <div class="row" style="gap:8px;flex-wrap:wrap;">
-        <button id="getStatusBtn" type="button">Получить статус</button>
+      ${st.orderData ? renderOrderCard(st.orderData) : `
+        <div class="card" style="margin-top:12px;">
+          <div class="muted">Заказ ещё не загружен.</div>
+        </div>
+      `}
+
+      <div class="card" style="margin-top:12px;">
+        <div style="font-weight:700;margin-bottom:8px;">Редактирование заказа</div>
+        <div class="muted" style="font-size:12px;margin-bottom:8px;">Меняйте любые поля через JSON или через список позиций ниже.</div>
+        <label class="field">
+          <span class="field-label">JSON заказа</span>
+          <textarea id="orderDraftJson" style="min-height:220px;"></textarea>
+        </label>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
+          <button id="applyDraftJson" type="button">Применить JSON</button>
+          <button id="updateOrderBtn" type="button">Обновить заказ</button>
+        </div>
+
+        <div class="hr"></div>
+        <div style="font-weight:650;">Позиции заказа</div>
+        <div id="orderItemsEditor" style="margin-top:8px;"></div>
+        <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:10px;">
+          <input id="newItemId" placeholder="Item ID" style="flex:1;min-width:120px;" />
+          <input id="newItemName" placeholder="Название" style="flex:2;min-width:160px;" />
+          <input id="newItemQty" type="number" min="1" placeholder="Кол-во" style="width:90px;" />
+          <input id="newItemPrice" type="number" min="0" placeholder="Цена" style="width:110px;" />
+          <button id="addOrderItemBtn" type="button">Добавить позицию</button>
+        </div>
       </div>
-    </div>
+    ` : `
+      <div class="card" style="margin-top:12px;">
+        <div class="muted">Сначала сохраните ID заказа.</div>
+      </div>
+    `}
 
     <div class="card" style="margin-top:12px;">
       <div style="font-weight:700;margin-bottom:8px;">Ответ</div>
       <pre id="ordersResponse" style="margin:0;background:#111;color:#eee;padding:12px;border-radius:12px;overflow:auto;max-height:60vh;font-size:12px;"></pre>
     </div>
-
+  `);
+}
     <dialog id="jsonDialog">
       <div class="dlg">
         <div class="row" style="justify-content:space-between;align-items:center;">
@@ -1377,20 +1513,8 @@ function ordersScreen() {
 
   wireBackButton();
 
-  const st = window.appState;
-  st.orderOps ||= {};
-  const ops = st.orderOps;
-
   const orderIdInput = document.getElementById('orderIdInput');
-  const deleteEatsId = document.getElementById('deleteEatsId');
-  const deleteComment = document.getElementById('deleteComment');
-  const updatePayload = document.getElementById('updatePayload');
   const responseEl = document.getElementById('ordersResponse');
-
-  if (orderIdInput) orderIdInput.value = ops.orderId || '';
-  if (deleteEatsId) deleteEatsId.value = ops.deleteEatsId || '';
-  if (deleteComment) deleteComment.value = ops.deleteComment || '';
-  if (updatePayload) updatePayload.value = ops.updatePayload || '';
 
   const setResponse = (data) => {
     if (!responseEl) return;
@@ -1398,97 +1522,217 @@ function ordersScreen() {
   };
 
   const setError = (err) => {
-    const info = formatApiError(err);
+    const info = formatApiError ? formatApiError(err) : { message: String(err) };
     setResponse({
-      error: info.message,
+      error: info.message || 'Ошибка',
       status: info.status,
       details: info.details,
     });
   };
 
-  const requireOrderId = () => {
-    const orderId = (orderIdInput?.value || '').trim();
-    if (!orderId) {
-      setResponse({ error: 'Нужно указать Order ID.' });
-      return null;
-    }
-    return orderId;
-  };
+  if (orderIdInput) orderIdInput.value = st.orderId || '';
 
-  if (orderIdInput) orderIdInput.oninput = () => { ops.orderId = orderIdInput.value; };
-  if (deleteEatsId) deleteEatsId.oninput = () => { ops.deleteEatsId = deleteEatsId.value; };
-  if (deleteComment) deleteComment.oninput = () => { ops.deleteComment = deleteComment.value; };
-  if (updatePayload) updatePayload.oninput = () => { ops.updatePayload = updatePayload.value; };
-
-  const getOrderBtn = document.getElementById('getOrderBtn');
-  if (getOrderBtn) {
-    getOrderBtn.onclick = async () => {
-      const orderId = requireOrderId();
-      if (!orderId) return;
-      try {
-        const res = await getOrder(orderId);
-        setResponse(res);
-      } catch (err) {
-        setError(err);
-      }
+  const saveOrderBtn = document.getElementById('saveOrderId');
+  if (saveOrderBtn) {
+    saveOrderBtn.onclick = () => {
+      const id = (orderIdInput?.value || '').trim();
+      st.orderId = id;
+      saveOrderId(id);
+      st.orderData = null;
+      st.orderDraft = null;
+      st.orderDraftText = '';
+      setResponse(null);
+      rerender();
     };
   }
 
-  const deleteOrderBtn = document.getElementById('deleteOrderBtn');
-  if (deleteOrderBtn) {
-    deleteOrderBtn.onclick = async () => {
-      const orderId = requireOrderId();
-      if (!orderId) return;
+  const clearOrderBtn = document.getElementById('clearOrderId');
+  if (clearOrderBtn) {
+    clearOrderBtn.onclick = () => {
+      st.orderId = '';
+      clearOrderId();
+      st.orderData = null;
+      st.orderDraft = null;
+      st.orderDraftText = '';
+      setResponse(null);
+      rerender();
+    };
+  }
+
+  if (!st.orderId) return;
+
+  const cancelEatsId = document.getElementById('cancelEatsId');
+  if (cancelEatsId && st.orderData?.eatsId) cancelEatsId.value = st.orderData.eatsId;
+
+  const cancelBtn = document.getElementById('cancelOrderBtn');
+  if (cancelBtn) {
+    cancelBtn.onclick = async () => {
       const payload = {
-        eatsId: (deleteEatsId?.value || '').trim(),
-        comment: (deleteComment?.value || '').trim(),
+        eatsId: (cancelEatsId?.value || '').trim(),
+        comment: (document.getElementById('cancelComment')?.value || '').trim(),
       };
       try {
-        const res = await deleteOrder(orderId, payload);
-        setResponse(res);
-      } catch (err) {
-        setError(err);
+        cancelBtn.disabled = true;
+        const res = await deleteOrder(st.orderId, payload);
+        setResponse(res || { ok: true, action: 'deleteOrder' });
+        try { tg().showPopup?.({ title: 'Успех', message: 'Заказ отменён.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      } catch (e) {
+        setError(e);
+        const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
+        try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      } finally {
+        cancelBtn.disabled = false;
       }
     };
   }
 
-  const updateOrderBtn = document.getElementById('updateOrderBtn');
-  if (updateOrderBtn) {
-    updateOrderBtn.onclick = async () => {
-      const orderId = requireOrderId();
-      if (!orderId) return;
-      const raw = (updatePayload?.value || '').trim();
-      if (!raw) {
-        setResponse({ error: 'Нужно указать JSON payload для обновления.' });
-        return;
-      }
-      let payload;
+  const fetchBtn = document.getElementById('fetchOrderBtn');
+  if (fetchBtn) {
+    fetchBtn.onclick = async () => {
       try {
-        payload = JSON.parse(raw);
-      } catch (err) {
-        setResponse({ error: 'Некорректный JSON: не удалось распарсить.' });
-        return;
-      }
-      try {
-        const res = await updateOrder(orderId, payload);
-        setResponse(res);
-      } catch (err) {
-        setError(err);
+        fetchBtn.disabled = true;
+        const data = await getOrder(st.orderId);
+        st.orderData = data;
+        st.orderDraft = cloneJson(data);
+        st.orderDraftText = JSON.stringify(st.orderDraft, null, 2);
+        setResponse(data);
+        rerender();
+      } catch (e) {
+        setError(e);
+        const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
+        try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      } finally {
+        fetchBtn.disabled = false;
       }
     };
   }
 
-  const getStatusBtn = document.getElementById('getStatusBtn');
-  if (getStatusBtn) {
-    getStatusBtn.onclick = async () => {
-      const orderId = requireOrderId();
-      if (!orderId) return;
+  const statusBtn = document.getElementById('fetchStatusBtn');
+  if (statusBtn) {
+    statusBtn.onclick = async () => {
       try {
-        const res = await getOrderStatus(orderId);
-        setResponse(res);
-      } catch (err) {
-        setError(err);
+        statusBtn.disabled = true;
+        const data = await getOrderStatus(st.orderId);
+        setResponse(data);
+        openJsonDialog(data);
+      } catch (e) {
+        setError(e);
+        const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
+        try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      } finally {
+        statusBtn.disabled = false;
       }
+    };
+  }
+
+  const jsonBtn = document.getElementById('orderJsonBtn');
+  if (jsonBtn) jsonBtn.onclick = () => st.orderData && openJsonDialog(st.orderData);
+  const jsonDlBtn = document.getElementById('orderJsonDownloadBtn');
+  if (jsonDlBtn) jsonDlBtn.onclick = () => st.orderData && downloadJson(st.orderData, `order_${st.orderId}.json`);
+
+  const draftText = st.orderDraftText || (st.orderDraft ? JSON.stringify(st.orderDraft, null, 2) : '');
+  const draftArea = document.getElementById('orderDraftJson');
+  if (draftArea) {
+    draftArea.value = draftText;
+    draftArea.oninput = () => { st.orderDraftText = draftArea.value; };
+  }
+
+  const applyDraftBtn = document.getElementById('applyDraftJson');
+  if (applyDraftBtn) {
+    applyDraftBtn.onclick = () => {
+      try {
+        const parsed = JSON.parse(st.orderDraftText || '');
+        st.orderDraft = parsed;
+        st.orderDraftText = JSON.stringify(parsed, null, 2);
+        setResponse(parsed);
+        rerender();
+      } catch (e) {
+        const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Некорректный JSON';
+        try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      }
+    };
+  }
+
+  const updateBtn = document.getElementById('updateOrderBtn');
+  if (updateBtn) {
+    updateBtn.onclick = async () => {
+      try {
+        const parsed = JSON.parse(st.orderDraftText || '');
+        updateBtn.disabled = true;
+        const res = await updateOrder(st.orderId, parsed);
+        st.orderData = cloneJson(parsed);
+        st.orderDraft = cloneJson(parsed);
+        st.orderDraftText = JSON.stringify(parsed, null, 2);
+        setResponse(res || parsed);
+        try { tg().showPopup?.({ title: 'Успех', message: 'Заказ обновлён.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+        rerender();
+      } catch (e) {
+        setError(e);
+        const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Ошибка';
+        try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      } finally {
+        updateBtn.disabled = false;
+      }
+    };
+  }
+
+  const itemsEditor = document.getElementById('orderItemsEditor');
+  if (itemsEditor) {
+    const draftItems = Array.isArray(st.orderDraft?.items) ? st.orderDraft.items : [];
+    itemsEditor.innerHTML = draftItems.map((it, idx) => `
+      <div class="order-item">
+        <div class="row" style="gap:8px;flex-wrap:wrap;">
+          <input data-idx="${idx}" data-field="id" placeholder="ID" value="${escAttr(it.id)}" style="flex:1;min-width:120px;" />
+          <input data-idx="${idx}" data-field="name" placeholder="Название" value="${escAttr(it.name)}" style="flex:2;min-width:160px;" />
+          <input data-idx="${idx}" data-field="quantity" type="number" min="1" placeholder="Кол-во" value="${escAttr(safeNum(it.quantity, 1))}" style="width:90px;" />
+          <input data-idx="${idx}" data-field="price" type="number" min="0" placeholder="Цена" value="${escAttr(safeNum(it.price, 0))}" style="width:110px;" />
+          <button data-idx="${idx}" class="removeOrderItem" type="button">Удалить</button>
+        </div>
+      </div>
+    `).join('') || `<div class="muted">Пока нет позиций.</div>`;
+
+    itemsEditor.querySelectorAll('input[data-idx]').forEach((input) => {
+      input.oninput = () => {
+        const idx = Number(input.getAttribute('data-idx'));
+        const field = input.getAttribute('data-field');
+        if (!Number.isFinite(idx) || !field || !st.orderDraft?.items?.[idx]) return;
+        if (field === 'quantity' || field === 'price') {
+          st.orderDraft.items[idx][field] = safeNum(input.value, 0);
+        } else {
+          st.orderDraft.items[idx][field] = input.value;
+        }
+        st.orderDraftText = JSON.stringify(st.orderDraft, null, 2);
+        if (draftArea) draftArea.value = st.orderDraftText;
+      };
+    });
+
+    itemsEditor.querySelectorAll('.removeOrderItem').forEach((btn) => {
+      btn.onclick = () => {
+        const idx = Number(btn.getAttribute('data-idx'));
+        if (!Number.isFinite(idx) || !st.orderDraft?.items?.length) return;
+        st.orderDraft.items.splice(idx, 1);
+        st.orderDraftText = JSON.stringify(st.orderDraft, null, 2);
+        rerender();
+      };
+    });
+  }
+
+  const addItemBtn = document.getElementById('addOrderItemBtn');
+  if (addItemBtn) {
+    addItemBtn.onclick = () => {
+      if (!st.orderDraft) st.orderDraft = { items: [] };
+      st.orderDraft.items ||= [];
+      const newItem = {
+        id: (document.getElementById('newItemId')?.value || '').trim(),
+        name: (document.getElementById('newItemName')?.value || '').trim(),
+        quantity: safeNum(document.getElementById('newItemQty')?.value || 1, 1),
+        price: safeNum(document.getElementById('newItemPrice')?.value || 0, 0),
+        modifications: [],
+        promos: []
+      };
+      st.orderDraft.items.push(newItem);
+      st.orderDraftText = JSON.stringify(st.orderDraft, null, 2);
+      rerender();
     };
   }
 }
@@ -1612,6 +1856,7 @@ function rerender() {
   // hydrate from storage once
   st.auth ||= loadAuth();
   st.restaurant ||= loadRestaurant();
+  st.orderId ||= loadOrderId();
 
   if (!st.auth?.accessToken) {
     st.screen = 'auth';
@@ -1645,6 +1890,7 @@ function bootstrap() {
   window.appState.restaurant = loadRestaurant();
   window.appState.orderId = loadOrderId();
   window.appState.cart = loadCart();
+  window.appState.orderId = loadOrderId();
   window.appState.screen = window.appState.auth?.accessToken ? (window.appState.restaurant?.id ? 'hub' : 'restaurants') : 'auth';
 
   // Telegram: expand UI
