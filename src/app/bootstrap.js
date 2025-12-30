@@ -1669,13 +1669,7 @@ function cartScreen() {
       const res = await createOrder(vv.payload);
       const id = res?.orderId || res?.id || res?.eatsId || '';
       if (id) {
-      const res = await createOrder(vv.payload);
-      const id = res?.orderId || res?.id || res?.eatsId || '';
-      if (id) {
         saveOrderId(id);
-        window.appState.orderId = id;
-      }
-
         window.appState.orderId = id;
       }
       try { tg().showPopup?.({ title: 'Отправлено', message: id ? `Заказ создан: ${id}` : 'Заказ создан успешно.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
