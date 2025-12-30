@@ -33,6 +33,7 @@ window.appState ||= {
   auth: null,          // { baseUrl, clientId, clientSecret, accessToken }
   restaurant: null,    // { id, name }
   orderId: null,       // last created order id
+  orderEatsId: null,
   cart: { items: [], orderDiscountPercent: 0 },  // [{ key, itemId, name, qty, basePrice, modifiers: [{id,name,price,amount}], totalPrice, discountPercent }], orderDiscountPercent
   orderData: null,
   orderDraft: null,
@@ -700,6 +701,7 @@ async function restaurantsScreen() {
       window.appState.restaurant = null;
       window.appState.orderId = '';
       window.appState.orderData = null;
+      window.appState.orderEatsId = null;
       window.appState.orderDraft = null;
       window.appState.orderDraftText = '';
       window.appState.orderMenuMap = null;
@@ -753,6 +755,7 @@ function hubScreen() {
     clearOrderId();
     window.appState.orderId = '';
     window.appState.orderData = null;
+    window.appState.orderEatsId = null;
     window.appState.orderDraft = null;
     window.appState.orderDraftText = '';
     window.appState.orderMenuMap = null;
@@ -769,6 +772,7 @@ function hubScreen() {
     window.appState.restaurant = null;
     window.appState.orderId = '';
     window.appState.orderData = null;
+    window.appState.orderEatsId = null;
     window.appState.orderDraft = null;
     window.appState.orderDraftText = '';
     window.appState.orderMenuMap = null;
@@ -1737,9 +1741,23 @@ function cartScreen() {
           <button id="checkoutBtn" type="button" disabled>Отправить (позже)</button>
         </div>
       </div>
+
     ` : `
       <div class="muted">Корзина пуста.</div>
     `}
+
+    ${st.orderData ? `
+      <div class="card" style="margin-top:12px;">
+        <div class="row" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div style="font-weight:700;">Ответ сервера</div>
+          <div class="row" style="gap:8px;flex-wrap:wrap;">
+            <button id="orderResponseJson" type="button">Открыть JSON</button>
+            ${st.orderId ? `<button id="goOrderFromCart" type="button">К заказу</button>` : ''}
+          </div>
+        </div>
+        <pre id="orderResponse" style="margin:10px 0 0;background:#111;color:#eee;padding:12px;border-radius:12px;overflow:auto;max-height:50vh;font-size:12px;"></pre>
+      </div>
+    ` : ''}
 
     <dialog id="jsonDialog">
       <div class="dlg">
@@ -1791,6 +1809,17 @@ function cartScreen() {
   const dlBtn=document.getElementById('downloadOrderJson');
   if(dlBtn) dlBtn.onclick=()=>{const payload=buildOrderPayload(); const blob=new Blob([JSON.stringify(payload,null,2)],{type:'application/json'}); const a=document.createElement('a'); a.href=URL.createObjectURL(blob); a.download='order.json'; a.click(); URL.revokeObjectURL(a.href);};
 
+  const orderResponseEl = document.getElementById('orderResponse');
+  if (orderResponseEl) {
+    orderResponseEl.textContent = st.orderData ? JSON.stringify(st.orderData, null, 2) : '';
+  }
+  const orderResponseJsonBtn = document.getElementById('orderResponseJson');
+  if (orderResponseJsonBtn) {
+    orderResponseJsonBtn.onclick = () => st.orderData && openJsonDialog(st.orderData);
+  }
+  const goOrderFromCart = document.getElementById('goOrderFromCart');
+  if (goOrderFromCart) goOrderFromCart.onclick = () => setScreen('orders');
+
   const checkoutBtn = document.getElementById('checkoutBtn');
   const validateOrderForm = () => {
     const p = buildOrderPayload();
@@ -1830,12 +1859,17 @@ function cartScreen() {
       const prevText = checkoutBtn.textContent;
       checkoutBtn.textContent = 'Отправляем...';
       const res = await createOrder(vv.payload);
-      const id = res?.orderId || res?.id || res?.eatsId || '';
-      if (id) {
-        saveOrderId(id);
-        window.appState.orderId = id;
+      window.appState.orderData = cloneJson(res);
+      const orderId = res?.orderId || res?.id || '';
+      const eatsId = res?.eatsId || '';
+      if (orderId) {
+        saveOrderId(orderId);
+        window.appState.orderId = orderId;
       }
-      try { tg().showPopup?.({ title: 'Отправлено', message: id ? `Заказ создан: ${id}` : 'Заказ создан успешно.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      window.appState.orderEatsId = eatsId || null;
+      openJsonDialog(res);
+      const displayId = orderId || eatsId;
+      try { tg().showPopup?.({ title: 'Отправлено', message: displayId ? `Заказ создан: ${displayId}` : 'Заказ создан успешно.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       window.appState.cart = { items: [] };
       saveCart(window.appState.cart);
       rerender();
@@ -2027,6 +2061,7 @@ async function ordersScreen() {
       st.orderId = id;
       saveOrderId(id);
       st.orderData = null;
+      st.orderEatsId = null;
       st.orderDraft = null;
       st.orderDraftText = '';
       setResponse(null);
@@ -2040,6 +2075,7 @@ async function ordersScreen() {
       st.orderId = '';
       clearOrderId();
       st.orderData = null;
+      st.orderEatsId = null;
       st.orderDraft = null;
       st.orderDraftText = '';
       setResponse(null);
