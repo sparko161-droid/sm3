@@ -8,7 +8,7 @@ export const loadRestaurant=()=>JSON.parse(localStorage.getItem(REST_KEY)||'null
 export const clearRestaurant=()=>localStorage.removeItem(REST_KEY);
 const CART_KEY='iiko_cart';
 export const saveCart=c=>localStorage.setItem(CART_KEY,JSON.stringify(c));
-export const loadCart=()=>{try{const v=JSON.parse(localStorage.getItem(CART_KEY)||'{"items":[]}');const items=Array.isArray(v?.items)?v.items:[];return {items};}catch(_){return {items:[]};}};
+export const loadCart=()=>{try{const v=JSON.parse(localStorage.getItem(CART_KEY)||'{"items":[]}');const items=Array.isArray(v?.items)?v.items:[];const orderDiscountPercent=Number(v?.orderDiscountPercent||0)||0;return {items,orderDiscountPercent};}catch(_){return {items:[],orderDiscountPercent:0};}};
 export const clearCart=()=>localStorage.removeItem(CART_KEY);
 const ORDER_KEY='iiko_order_id';
 export const saveOrderId=v=>localStorage.setItem(ORDER_KEY,JSON.stringify(String(v||'')));
