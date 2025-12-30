@@ -358,6 +358,7 @@ function normalizePromosResponse(raw) {
     if (Array.isArray(payload)) return payload;
     if (!payload) return [];
     if (Array.isArray(payload?.promos)) return payload.promos;
+    if (Array.isArray(payload?.promoItems)) return payload.promoItems;
     if (Array.isArray(payload?.items)) return payload.items;
     if (Array.isArray(payload?.products)) return payload.products;
     if (Array.isArray(payload?.promotions)) return payload.promotions;
@@ -388,7 +389,7 @@ function buildPromoItemsById(promos) {
   const map = new Map();
   const list = Array.isArray(promos) ? promos : [];
   for (const promo of list) {
-    const itemId = promo?.itemId ?? promo?.item?.id ?? promo?.productId;
+    const itemId = promo?.itemId ?? promo?.item?.id ?? promo?.productId ?? promo?.id ?? promo?.promoId;
     if (!itemId) continue;
     const key = String(itemId);
     const entries = map.get(key) || [];
@@ -1283,7 +1284,20 @@ function cartToOrderItems() {
     if (discountPercent > 0) {
       promos.push({ type: 'PERCENTAGE', discountPercent });
     }
-    return { id, name, quantity, price, modifications, discountPercent, promos };
+    const modifiersTotal = modifications.reduce((sum, m) => sum + safeNum(m.price, 0) * safeNum(m.quantity, 1), 0);
+    const baseTotal = roundMoney((price + modifiersTotal) * quantity);
+    const giftTokens = ['GIFT', 'PRESENT', 'BONUS'];
+    const normalizedPromos = promos.map((promo) => {
+      const type = String(promo?.type || '').toUpperCase();
+      const isGift = !type || giftTokens.some((token) => type.includes(token));
+      if (!isGift) return promo;
+      return {
+        ...promo,
+        type: 'GIFT',
+        discount: baseTotal,
+      };
+    });
+    return { id, name, quantity, price, modifications, discountPercent, promos: normalizedPromos };
   });
 }
 
