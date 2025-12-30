@@ -1240,23 +1240,39 @@ function buildOrderPayload() {
   const delivery = new Date(now.getTime() + 2*60*60*1000);
   st.orderForm ||= {};
   const f = st.orderForm;
+  const orderType = f.orderType || 'delivery';
   const deliveryFee = safeNum(f.deliveryFee, 0);
   const change = safeNum(f.change, 0);
   const total = itemsCost + deliveryFee;
+  const resolveDate = (value, fallbackDate) => {
+    const raw = String(value || '').trim();
+    if (raw) {
+      const parsed = new Date(raw);
+      if (!Number.isNaN(parsed.getTime())) return formatIsoWithOffset(parsed);
+      return raw;
+    }
+    return formatIsoWithOffset(fallbackDate);
+  };
+  const deliveryInfo = {
+    clientName: "Yandex.Eda",
+    phoneNumber: "88006001210",
+  };
+  if (orderType === 'pickup') {
+    deliveryInfo.courierArrivementDate = resolveDate(f.courierArrivementDate, delivery);
+  } else {
+    deliveryInfo.deliveryDate = resolveDate(f.deliveryDate, delivery);
+    deliveryInfo.deliveryAddress = {
+      full: (f.addressFull || '').trim(),
+      latitude: (f.latitude || '').trim(),
+      longitude: (f.longitude || '').trim()
+    };
+  }
   return {
     discriminator: "marketplace",
+    ...(orderType === 'pickup' ? { platform: (f.platform || '').trim() } : {}),
     eatsId: f.eatsId || genEatsIdFromNow(now),
     restaurantId: String(st.restaurant?.id || ''),
-    deliveryInfo: {
-      clientName: "Yandex.Eda",
-      phoneNumber: "88006001210",
-      deliveryDate: formatIsoWithOffset(delivery),
-      deliveryAddress: {
-        full: (f.addressFull || '').trim(),
-        latitude: (f.latitude || '').trim(),
-        longitude: (f.longitude || '').trim()
-      }
-    },
+    deliveryInfo,
     paymentInfo: {
       paymentType: "CASH",
       itemsCost: itemsCost,
@@ -1424,6 +1440,23 @@ function renderOrderCard(order, menuMap) {
 function cartScreen() {
   const st = window.appState;
   st.cart ||= { items: [] };
+  st.orderForm ||= {};
+  const f = st.orderForm;
+  if (f.orderType === undefined) f.orderType = 'delivery';
+  const orderType = f.orderType || 'delivery';
+  const isDelivery = orderType !== 'pickup';
+  const now = new Date();
+  const defaultDate = new Date(now.getTime() + 2*60*60*1000);
+  const formatDateInput = (d) => {
+    const y = d.getFullYear();
+    const mo = pad2(d.getMonth()+1);
+    const da = pad2(d.getDate());
+    const h = pad2(d.getHours());
+    const mi = pad2(d.getMinutes());
+    return `${y}-${mo}-${da}T${h}:${mi}`;
+  };
+  if (f.deliveryDate === undefined) f.deliveryDate = formatDateInput(defaultDate);
+  if (f.courierArrivementDate === undefined) f.courierArrivementDate = formatDateInput(defaultDate);
 
   const items = st.cart.items || [];
   const total = cartTotal();
@@ -1462,21 +1495,48 @@ function cartScreen() {
 
       
       <div class="card" style="margin-top:12px;">
-        <div style="font-weight:700;margin-bottom:8px;">Доставка</div>
-        <div class="row" style="gap:8px;flex-wrap:wrap;">
-          <label class="field" style="flex:1;min-width:220px;">
-            <span class="field-label">Адрес</span>
-            <input id="addrFull" placeholder="" />
+        <div style="font-weight:700;margin-bottom:8px;">Тип заказа</div>
+        <div class="row" style="gap:12px;flex-wrap:wrap;margin-bottom:10px;">
+          <label class="row" style="gap:6px;align-items:center;">
+            <input type="radio" name="orderType" id="orderTypeDelivery" value="delivery" ${isDelivery ? 'checked' : ''} />
+            <span>Доставка</span>
           </label>
-          <label class="field" style="width:140px;">
-            <span class="field-label">Широта</span>
-            <input id="addrLat" placeholder="" />
-          </label>
-          <label class="field" style="width:140px;">
-            <span class="field-label">Долгота</span>
-            <input id="addrLon" placeholder="" />
+          <label class="row" style="gap:6px;align-items:center;">
+            <input type="radio" name="orderType" id="orderTypePickup" value="pickup" ${!isDelivery ? 'checked' : ''} />
+            <span>Самовывоз</span>
           </label>
         </div>
+        ${isDelivery ? `
+          <div class="row" style="gap:8px;flex-wrap:wrap;">
+            <label class="field" style="flex:1;min-width:220px;">
+              <span class="field-label">Адрес</span>
+              <input id="addrFull" placeholder="" />
+            </label>
+            <label class="field" style="width:140px;">
+              <span class="field-label">Широта</span>
+              <input id="addrLat" placeholder="" />
+            </label>
+            <label class="field" style="width:140px;">
+              <span class="field-label">Долгота</span>
+              <input id="addrLon" placeholder="" />
+            </label>
+            <label class="field" style="width:220px;">
+              <span class="field-label">Дата доставки</span>
+              <input id="deliveryDate" type="datetime-local" />
+            </label>
+          </div>
+        ` : `
+          <div class="row" style="gap:8px;flex-wrap:wrap;">
+            <label class="field" style="width:220px;">
+              <span class="field-label">Платформа</span>
+              <input id="platform" placeholder="telegram" />
+            </label>
+            <label class="field" style="width:220px;">
+              <span class="field-label">Courier arrival</span>
+              <input id="courierArrivementDate" type="datetime-local" />
+            </label>
+          </div>
+        `}
         <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
           <label class="field" style="width:120px;">
             <span class="field-label">Количество персон</span>
@@ -1499,7 +1559,7 @@ function cartScreen() {
           <span class="field-label">Комментарий</span>
           <textarea id="comment" placeholder="" style="width:100%;min-height:64px;"></textarea>
         </label>
-        <div class="muted" style="font-size:12px;margin-top:6px;">deliveryDate = текущее локальное время +2 часа.</div>
+        <div class="muted" style="font-size:12px;margin-top:6px;">Дата по умолчанию = текущее локальное время +2 часа.</div>
       </div>
 
       <div class="card" style="margin-top:12px;">
@@ -1532,12 +1592,13 @@ function cartScreen() {
 
   wireBackButton();
 
-  st.orderForm ||= {};
-  const f = st.orderForm;
   const setVal=(id,v)=>{const el=document.getElementById(id); if(el) el.value = v ?? '';};
   setVal('addrFull', f.addressFull || '');
   setVal('addrLat', f.latitude || '');
   setVal('addrLon', f.longitude || '');
+  setVal('deliveryDate', f.deliveryDate || '');
+  setVal('platform', f.platform || '');
+  setVal('courierArrivementDate', f.courierArrivementDate || '');
   setVal('persons', f.persons ?? 1);
   setVal('deliveryFee', f.deliveryFee ?? 0);
   setVal('change', f.change ?? 0);
@@ -1547,11 +1608,21 @@ function cartScreen() {
   bind('addrFull','addressFull');
   bind('addrLat','latitude');
   bind('addrLon','longitude');
+  bind('deliveryDate','deliveryDate');
+  bind('platform','platform');
+  bind('courierArrivementDate','courierArrivementDate');
   bind('persons','persons');
   bind('deliveryFee','deliveryFee');
   bind('change','change');
   bind('eatsId','eatsId');
   bind('comment','comment');
+  const orderTypeInputs = document.querySelectorAll('input[name="orderType"]');
+  for (const el of orderTypeInputs) {
+    el.onchange = () => {
+      f.orderType = el.value;
+      rerender();
+    };
+  }
   const showBtn=document.getElementById('showOrderJson');
   if(showBtn) showBtn.onclick=()=>{const payload=buildOrderPayload(); openJsonDialog(payload);};
   const dlBtn=document.getElementById('downloadOrderJson');
@@ -1560,8 +1631,11 @@ function cartScreen() {
   const checkoutBtn = document.getElementById('checkoutBtn');
   const validateOrderForm = () => {
     const p = buildOrderPayload();
+    const useDelivery = (f.orderType || 'delivery') !== 'pickup';
     const addr = p.deliveryInfo?.deliveryAddress || {};
-    const addrOk = String(addr.full || '').trim() && String(addr.latitude || '').trim() && String(addr.longitude || '').trim();
+    const addrOk = useDelivery
+      ? String(addr.full || '').trim() && String(addr.latitude || '').trim() && String(addr.longitude || '').trim()
+      : true;
     const restOk = String(p.restaurantId || '').trim().length > 0;
     const itemsOk = Array.isArray(p.items) && p.items.length > 0;
     return { ok: !!(addrOk && restOk && itemsOk), payload: p };
@@ -1570,7 +1644,7 @@ function cartScreen() {
   const vv0 = validateOrderForm();
   if (checkoutBtn) checkoutBtn.disabled = !vv0.ok;
 
-  const watchIds = ['addrFull','addrLat','addrLon','persons','deliveryFee','change','eatsId','comment'];
+  const watchIds = ['addrFull','addrLat','addrLon','deliveryDate','platform','courierArrivementDate','persons','deliveryFee','change','eatsId','comment'];
   for (const id of watchIds) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -1581,7 +1655,11 @@ function cartScreen() {
   if (checkoutBtn) checkoutBtn.onclick = async () => {
     const vv = validateOrderForm();
     if (!vv.ok) {
-      try { tg().showPopup?.({ title: 'Не готово', message: 'Заполни адрес (full + lat/lon) и добавь позиции в корзину.', buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
+      const useDelivery = (f.orderType || 'delivery') !== 'pickup';
+      const msg = useDelivery
+        ? 'Заполни адрес (full + lat/lon) и добавь позиции в корзину.'
+        : 'Добавь позиции в корзину и проверь данные самовывоза.';
+      try { tg().showPopup?.({ title: 'Не готово', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       return;
     }
     try {
