@@ -36,7 +36,6 @@ window.appState ||= {
   orderData: null,
   orderDraft: null,
   orderDraftText: '',
-  orderInputText: '',
   orderMenuMap: null,
   orderId: loadOrderId(),
   screen: 'auth',      // auth | restaurants | hub | menu | availability | cart
@@ -597,7 +596,6 @@ async function restaurantsScreen() {
       window.appState.orderData = null;
       window.appState.orderDraft = null;
       window.appState.orderDraftText = '';
-      window.appState.orderInputText = '';
       window.appState.orderMenuMap = null;
       window.appState.history = [];
       setScreen('auth', { pushHistory: false });
@@ -651,7 +649,6 @@ function hubScreen() {
     window.appState.orderData = null;
     window.appState.orderDraft = null;
     window.appState.orderDraftText = '';
-    window.appState.orderInputText = '';
     window.appState.orderMenuMap = null;
     window.appState.history = [];
     setScreen('restaurants', { pushHistory: false });
@@ -668,7 +665,6 @@ function hubScreen() {
     window.appState.orderData = null;
     window.appState.orderDraft = null;
     window.appState.orderDraftText = '';
-    window.appState.orderInputText = '';
     window.appState.orderMenuMap = null;
     window.appState.history = [];
     setScreen('auth', { pushHistory: false });
@@ -1561,19 +1557,6 @@ async function ordersScreen() {
     ${header('Заказы')}
 
     <div class="card">
-      <div style="font-weight:700;margin-bottom:8px;">Входящий JSON заказа</div>
-      <div class="muted" style="font-size:12px;margin-bottom:8px;">Поддерживаются ответы вида <code>{ data: "{...}" }</code> и чистый JSON заказа.</div>
-      <label class="field">
-        <span class="field-label">JSON</span>
-        <textarea id="orderInputJson" style="min-height:160px;"></textarea>
-      </label>
-      <div class="row" style="gap:8px;flex-wrap:wrap;margin-top:8px;">
-        <button id="applyOrderInput" type="button">Нормализовать и показать</button>
-        <button id="clearOrderInput" type="button">Очистить</button>
-      </div>
-    </div>
-
-    <div class="card">
       <div style="font-weight:700;margin-bottom:8px;">ID заказа</div>
       <div class="row" style="gap:8px;flex-wrap:wrap;">
         <input id="orderIdInput" placeholder="Введите ID заказа" value="${st.orderId || ''}" />
@@ -1704,36 +1687,6 @@ async function ordersScreen() {
     setResponse(normalized);
     rerender();
   };
-
-  const orderInputArea = document.getElementById('orderInputJson');
-  if (orderInputArea) {
-    orderInputArea.value = st.orderInputText || '';
-    orderInputArea.oninput = () => { st.orderInputText = orderInputArea.value; };
-  }
-
-  const applyOrderInputBtn = document.getElementById('applyOrderInput');
-  if (applyOrderInputBtn) {
-    applyOrderInputBtn.onclick = async () => {
-      try {
-        const raw = JSON.parse(st.orderInputText || '');
-        applyOrderInputBtn.disabled = true;
-        await applyNormalizedOrder(raw);
-      } catch (e) {
-        const msg = (e && (e.message || e.error?.message || JSON.stringify(e))) || 'Некорректный JSON';
-        try { tg().showPopup?.({ title: 'Ошибка', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
-      } finally {
-        applyOrderInputBtn.disabled = false;
-      }
-    };
-  }
-
-  const clearOrderInputBtn = document.getElementById('clearOrderInput');
-  if (clearOrderInputBtn) {
-    clearOrderInputBtn.onclick = () => {
-      st.orderInputText = '';
-      if (orderInputArea) orderInputArea.value = '';
-    };
-  }
 
   if (orderIdInput) orderIdInput.value = st.orderId || '';
 
