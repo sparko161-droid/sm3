@@ -258,7 +258,7 @@ function addToCart(item, sel, { promos } = {}) {
       modifications,
 
       discountPercent: 0,
-      promos: [],
+      promos: promoEntries,
       imgUrl: item.images?.[0]?.url || item.images?.[0] || ''
     })))
   }
@@ -488,6 +488,38 @@ function flattenPromos(order) {
   return promos;
 }
 
+const GIFT_TYPE_TOKENS = ['GIFT', 'PRESENT', 'BONUS'];
+const GIFT_DISH_TOKENS = ['DISH', 'MEAL', 'FOOD'];
+
+function normalizePromoType(value) {
+  return safeStr(value, '').toUpperCase();
+}
+
+function isGiftPromoType(type) {
+  const normalized = normalizePromoType(type);
+  return GIFT_TYPE_TOKENS.some((token) => normalized.includes(token));
+}
+
+function giftLabelForType(type) {
+  const normalized = normalizePromoType(type);
+  const isDish = GIFT_DISH_TOKENS.some((token) => normalized.includes(token));
+  return isDish ? 'Подарочное блюдо' : 'Подарок';
+}
+
+function giftLabelForPromos(promos) {
+  const list = Array.isArray(promos) ? promos : [];
+  let hasGift = false;
+  for (const promo of list) {
+    const type = normalizePromoType(promo?.type);
+    if (!isGiftPromoType(type)) continue;
+    hasGift = true;
+    if (GIFT_DISH_TOKENS.some((token) => type.includes(token))) {
+      return 'Подарочное блюдо';
+    }
+  }
+  return hasGift ? 'Подарок' : '';
+}
+
 function summarizePromos(promos) {
   const list = Array.isArray(promos) ? promos : [];
   let discountTotal = 0;
@@ -498,13 +530,16 @@ function summarizePromos(promos) {
     GIFT: 'Подарок',
   };
   const readable = list.map((p) => {
+    const type = normalizePromoType(p.type || 'PROMO');
+    const isGift = isGiftPromoType(type);
     const discount = safeNum(p.discount, 0);
-    discountTotal += discount;
-    if (!discount) giftCount += 1;
-    const type = safeStr(p.type, 'PROMO');
+    if (!isGift) discountTotal = roundMoney(discountTotal + discount);
+    if (isGift) giftCount += 1;
     const readableType = promoTypeLabels[type] ? `${promoTypeLabels[type]} (${type})` : type;
     const scope = p.scope === 'item' ? `позиция: ${safeStr(p.itemName, p.itemId)}` : 'заказ';
-    const label = discount ? `${readableType}: -${rub(discount)}` : `${readableType}: подарок`;
+    const label = isGift
+      ? `${giftLabelForType(type)} (${type})`
+      : `${readableType}: -${rub(discount)}`;
     return `${label} · ${scope}`;
   });
   return { discountTotal, giftCount, readable };
@@ -1229,7 +1264,7 @@ function cartToOrderItems() {
       price: safeNum(m.price, 0),
     }));
 
-    const promos = [];
+    const promos = Array.isArray(x.promos) ? x.promos.slice() : [];
     if (discountPercent > 0) {
       promos.push({ type: 'PERCENTAGE', discountPercent });
     }
@@ -1470,6 +1505,7 @@ function renderOrderCard(order, menuMap) {
           const menuItem = menuMap?.get?.(String(it.id));
           const imgUrl = menuItem?.images?.[0]?.url || menuItem?.images?.[0] || '';
           const itemPromos = summarizePromos(Array.isArray(it.promos) ? it.promos : []);
+          const giftLabel = giftLabelForPromos(it.promos);
           return `
             <div class="order-item">
               <div class="row" style="gap:10px;align-items:flex-start;">
@@ -1479,7 +1515,12 @@ function renderOrderCard(order, menuMap) {
                 <div style="min-width:0;flex:1;">
                   <div style="font-weight:650;">${safeStr(it.name, it.id)}</div>
                   <div class="muted" style="font-size:12px;">id: <code>${safeStr(it.id, '')}</code></div>
-                  ${itemPromos.discountTotal || itemPromos.giftCount ? `<div style="margin-top:4px;"><span class="badge">Промо</span></div>` : ''}
+                  ${itemPromos.discountTotal || itemPromos.giftCount ? `
+                    <div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;">
+                      ${itemPromos.discountTotal ? `<span class="badge">Скидка</span>` : ''}
+                      ${itemPromos.giftCount ? `<span class="badge">${giftLabel || 'Подарок'}</span>` : ''}
+                    </div>
+                  ` : ''}
                   ${mods ? `<div class="muted" style="font-size:12px;margin-top:4px;">${mods}</div>` : ''}
                   ${itemPromos.discountTotal || itemPromos.giftCount ? `
                     <div class="muted" style="font-size:12px;margin-top:4px;">
@@ -1544,8 +1585,14 @@ function cartScreen() {
       <div class="list">
         ${items.map((x) => {
           const mods = (x.modifications || []).map(m => `${m.name}${m.quantity > 1 ? ` ×${m.quantity}` : ''}${m.price ? ` (+${rub(m.price * (m.quantity||1))})` : ''}`).join(', ');
-          const promoLabel = Array.isArray(x.promos) && x.promos.length ? `<span class="badge">Промо</span>` : '';
+          const itemPromos = summarizePromos(Array.isArray(x.promos) ? x.promos : []);
+          const giftLabel = giftLabelForPromos(x.promos);
           const itemDiscountPercent = readItemDiscountPercent(x);
+          const discountBadge = itemDiscountPercent > 0 ? `<span class="badge">Скидка</span>` : '';
+          const giftBadge = itemPromos.giftCount ? `<span class="badge">${giftLabel || 'Подарок'}</span>` : '';
+          const promoLabel = discountBadge || giftBadge
+            ? `<div style="margin-top:4px;display:flex;gap:6px;flex-wrap:wrap;">${discountBadge}${giftBadge}</div>`
+            : '';
           const baseTotal = calcItemBaseTotal(x);
           const itemDiscountTotal = roundMoney(baseTotal * (itemDiscountPercent / 100));
           const discountedTotal = roundMoney(baseTotal - itemDiscountTotal);
@@ -1557,7 +1604,7 @@ function cartScreen() {
                 </div>
                 <div style="min-width:0;flex:1;">
                   <div style="font-weight:650;">${x.name}</div>
-                  ${promoLabel ? `<div style="margin-top:4px;">${promoLabel}</div>` : ``}
+                  ${promoLabel}
                   ${mods ? `<div class="muted" style="font-size:12px;margin-top:4px;">${mods}</div>` : ``}
                   <div class="row" style="justify-content:space-between;margin-top:8px;align-items:center;">
                     <div class="stepper" data-step="${x.key}">
