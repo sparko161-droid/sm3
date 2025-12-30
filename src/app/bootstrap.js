@@ -1234,6 +1234,22 @@ function formatIsoWithOffset(d) {
   const om = pad2(abs%60);
   return `${y}-${mo}-${da}T${h}:${mi}:${s}.000000${sign}${oh}:${om}`;
 }
+function parseDateTimeInput(value) {
+  if (!value) return null;
+  if (value instanceof Date) return value;
+  const raw = safeStr(value, '').trim();
+  if (!raw) return null;
+  const [datePart, timePart] = raw.split('T');
+  if (!datePart || !timePart) return null;
+  const [year, month, day] = datePart.split('-').map(Number);
+  const [hour = '0', minute = '0', second = '0'] = timePart.split(':');
+  if (!year || !month || !day) return null;
+  return new Date(year, month - 1, day, Number(hour), Number(minute), Number(second));
+}
+function formatDateForApi(value, fallbackDate) {
+  const parsed = parseDateTimeInput(value) || fallbackDate;
+  return parsed ? formatIsoWithOffset(parsed) : '';
+}
 function genEatsIdFromNow(d) {
   const yy=String(d.getFullYear()).slice(-2);
   return `${yy}${pad2(d.getMonth()+1)}${pad2(d.getDate())}-${pad2(d.getHours())}${pad2(d.getMinutes())}`;
@@ -1367,10 +1383,10 @@ function buildOrderPayload() {
   const total = roundMoney(itemsCost + deliveryFee);
   const deliveryInfo = orderType === 'pickup'
     ? {
-      courierArrivementDate: f.courierArrivementDate || formatDateInput(delivery)
+      courierArrivementDate: formatDateForApi(f.courierArrivementDate, delivery)
     }
     : {
-      deliveryDate: f.deliveryDate || formatDateInput(delivery),
+      deliveryDate: formatDateForApi(f.deliveryDate, delivery),
       deliveryAddress: {
         full: safeStr(f.addressFull, ''),
         latitude: safeStr(f.latitude, ''),
