@@ -1287,12 +1287,32 @@ function buildOrderPayload() {
   const itemsCost = calcItemsCost(orderItems, orderDiscountPercent);
   const now = new Date();
   const delivery = new Date(now.getTime() + 2*60*60*1000);
+  const formatDateInput = (d) => {
+    const y = d.getFullYear();
+    const mo = pad2(d.getMonth()+1);
+    const da = pad2(d.getDate());
+    const h = pad2(d.getHours());
+    const mi = pad2(d.getMinutes());
+    return `${y}-${mo}-${da}T${h}:${mi}`;
+  };
   st.orderForm ||= {};
   const f = st.orderForm;
   const orderType = f.orderType || 'delivery';
   const deliveryFee = roundMoney(safeNum(f.deliveryFee, 0));
   const change = roundMoney(safeNum(f.change, 0));
   const total = roundMoney(itemsCost + deliveryFee);
+  const deliveryInfo = orderType === 'pickup'
+    ? {
+      courierArrivementDate: f.courierArrivementDate || formatDateInput(delivery)
+    }
+    : {
+      deliveryDate: f.deliveryDate || formatDateInput(delivery),
+      deliveryAddress: {
+        full: safeStr(f.addressFull, ''),
+        latitude: safeStr(f.latitude, ''),
+        longitude: safeStr(f.longitude, '')
+      }
+    };
   const promos = [];
   if (orderDiscountPercent > 0) {
     promos.push({ type: 'PERCENTAGE', discountPercent: orderDiscountPercent });
