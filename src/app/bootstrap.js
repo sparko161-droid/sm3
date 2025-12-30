@@ -32,7 +32,7 @@ window.appState ||= {
   auth: null,          // { baseUrl, clientId, clientSecret, accessToken }
   restaurant: null,    // { id, name }
   orderId: null,       // last created order id
-  cart: { items: [] },  // [{ key, itemId, name, qty, basePrice, modifiers: [{id,name,price,amount}], totalPrice }]
+  cart: { items: [], orderDiscountPercent: 0 },  // [{ key, itemId, name, qty, basePrice, modifiers: [{id,name,price,amount}], totalPrice, discountPercent }], orderDiscountPercent
   orderData: null,
   orderDraft: null,
   orderDraftText: '',
@@ -225,7 +225,7 @@ function selectionToModifiers(item, sel) {
 
 function addToCart(item, sel) {
   const st = window.appState;
-  st.cart ||= { items: [] };
+  st.cart ||= { items: [], orderDiscountPercent: 0 };
 
   const modifications = selectionToModifiers(item, sel).map((m) => ({
     id: String(m.id),
@@ -247,6 +247,7 @@ function addToCart(item, sel) {
       quantity: 1,
       price: safeNum(item.price, 0),
       modifications,
+      discountPercent: 0,
       promos: [],
       imgUrl: item.images?.[0]?.url || item.images?.[0] || ''
     })))
@@ -271,7 +272,8 @@ function updateCartItemQty(key, qty) {
 }
 function cartTotal() {
   const orderItems = cartToOrderItems();
-  return calcItemsCost(orderItems);
+  const orderDiscountPercent = clampPercent(window.appState.cart?.orderDiscountPercent ?? 0);
+  return calcItemsCost(orderItems, orderDiscountPercent);
 }
 
 function tg() {
@@ -1130,6 +1132,7 @@ function cartToOrderItems() {
     const name = safeStr(x.name, id || '');
     const quantity = safeNum(x.quantity, safeNum(x.qty, 1));
     const price = safeNum(x.price, safeNum(x.basePrice, 0));
+    const discountPercent = clampPercent(safeNum(x.discountPercent, 0));
 
     const rawMods = Array.isArray(x.modifications) ? x.modifications : (Array.isArray(x.modifiers) ? x.modifiers : []);
     const modifications = rawMods.map((m) => ({
@@ -1139,22 +1142,62 @@ function cartToOrderItems() {
       price: safeNum(m.price, 0),
     }));
 
-    return { id, name, quantity, price, modifications, promos: [] };
+    const promos = [];
+    if (discountPercent > 0) {
+      promos.push({ type: 'PERCENTAGE', discountPercent });
+    }
+    return { id, name, quantity, price, modifications, discountPercent, promos };
   });
 }
-function calcItemsCost(orderItems) {
-  let sum = 0;
+
+function clampPercent(value) {
+  const n = Number(value || 0);
+  if (!Number.isFinite(n)) return 0;
+  return Math.min(100, Math.max(0, n));
+}
+
+function calcItemBaseTotal(it) {
+  const mods = (it.modifications || []).reduce((s, m) => s + safeNum(m.price, 0) * safeNum(m.quantity, 1), 0);
+  const unit = safeNum(it.price, 0) + mods;
+  return unit * safeNum(it.quantity, 1);
+}
+
+function readItemDiscountPercent(it) {
+  if (it?.discountPercent != null) return clampPercent(it.discountPercent);
+  const promos = Array.isArray(it?.promos) ? it.promos : [];
+  const percent = promos
+    .filter((p) => safeStr(p.type, '').toUpperCase() === 'PERCENTAGE')
+    .reduce((sum, p) => sum + clampPercent(p.discountPercent ?? p.percent ?? p.value), 0);
+  return clampPercent(percent);
+}
+
+function readOrderDiscountPercent(promos) {
+  const list = Array.isArray(promos) ? promos : [];
+  const percent = list
+    .filter((p) => safeStr(p.type, '').toUpperCase() === 'PERCENTAGE')
+    .reduce((sum, p) => sum + clampPercent(p.discountPercent ?? p.percent ?? p.value), 0);
+  return clampPercent(percent);
+}
+
+function calcItemsCost(orderItems, orderDiscountPercent = 0) {
+  let baseTotal = 0;
+  let itemDiscountTotal = 0;
   for (const it of orderItems) {
-    const mods = (it.modifications || []).reduce((s,m)=>s+safeNum(m.price,0)*safeNum(m.quantity,1),0);
-    const unit = safeNum(it.price,0) + mods;
-    sum += unit * safeNum(it.quantity,1);
+    const base = calcItemBaseTotal(it);
+    const discountPercent = readItemDiscountPercent(it);
+    const discount = base * (discountPercent / 100);
+    baseTotal += base;
+    itemDiscountTotal += discount;
   }
-  return sum;
+  const subtotalAfterItems = baseTotal - itemDiscountTotal;
+  const orderDiscount = subtotalAfterItems * (clampPercent(orderDiscountPercent) / 100);
+  return subtotalAfterItems - orderDiscount;
 }
 function buildOrderPayload() {
   const st = window.appState;
   const orderItems = cartToOrderItems();
-  const itemsCost = calcItemsCost(orderItems);
+  const orderDiscountPercent = clampPercent(st.cart?.orderDiscountPercent ?? 0);
+  const itemsCost = calcItemsCost(orderItems, orderDiscountPercent);
   const now = new Date();
   const delivery = new Date(now.getTime() + 2*60*60*1000);
   st.orderForm ||= {};
@@ -1162,6 +1205,10 @@ function buildOrderPayload() {
   const deliveryFee = safeNum(f.deliveryFee, 0);
   const change = safeNum(f.change, 0);
   const total = itemsCost + deliveryFee;
+  const promos = [];
+  if (orderDiscountPercent > 0) {
+    promos.push({ type: 'PERCENTAGE', discountPercent: orderDiscountPercent });
+  }
   return {
     discriminator: "marketplace",
     eatsId: f.eatsId || genEatsIdFromNow(now),
@@ -1186,7 +1233,7 @@ function buildOrderPayload() {
     items: orderItems,
     persons: Number(f.persons ?? 1),
     comment: (f.comment || '').trim(),
-    promos: []
+    promos
   };
 }
 
@@ -1214,16 +1261,21 @@ function renderOrderCard(order, menuMap) {
   const paymentType = safeStr(payment.paymentType, '');
   const change = safeNum(payment.change, 0);
   const promoSummary = summarizePromos(flattenPromos(order));
-  const itemsBaseTotal = items.reduce((sum, it) => {
-    const qty = safeNum(it.quantity, 1);
-    const price = safeNum(it.price, 0);
-    const modsTotal = (it.modifications || []).reduce((s, m) => s + safeNum(m.price, 0) * safeNum(m.quantity, 1), 0);
-    return sum + qty * (price + modsTotal);
+  const itemsBaseTotal = items.reduce((sum, it) => sum + calcItemBaseTotal(it), 0);
+  const itemDiscountTotal = items.reduce((sum, it) => {
+    const base = calcItemBaseTotal(it);
+    const percent = readItemDiscountPercent(it);
+    return sum + base * (percent / 100);
   }, 0);
+  const orderDiscountPercent = readOrderDiscountPercent(order?.promos);
+  const itemsAfterItemDiscount = itemsBaseTotal - itemDiscountTotal;
+  const orderDiscountTotal = itemsAfterItemDiscount * (orderDiscountPercent / 100);
+  const itemsAfterAllDiscount = itemsAfterItemDiscount - orderDiscountTotal;
   const paymentItemsRaw = payment.itemsCost;
-  const itemsBeforeDiscount = paymentItemsRaw !== undefined && paymentItemsRaw !== null
-    ? safeNum(paymentItemsRaw, itemsBaseTotal)
-    : itemsBaseTotal;
+  const itemsBeforeDiscount = itemsBaseTotal;
+  const itemsAfterDiscount = paymentItemsRaw !== undefined && paymentItemsRaw !== null
+    ? safeNum(paymentItemsRaw, itemsAfterAllDiscount)
+    : itemsAfterAllDiscount;
   const paymentDiscountRaw = payment.discountTotal ?? payment.discount;
   const discountTotal = paymentDiscountRaw !== undefined && paymentDiscountRaw !== null
     ? safeNum(paymentDiscountRaw, promoSummary.discountTotal)
@@ -1231,8 +1283,8 @@ function renderOrderCard(order, menuMap) {
   const deliveryFee = safeNum(payment.deliveryFee, 0);
   const paymentTotalRaw = payment.total;
   const totalAfterDiscount = paymentTotalRaw !== undefined && paymentTotalRaw !== null
-    ? safeNum(paymentTotalRaw, itemsBeforeDiscount - discountTotal + deliveryFee)
-    : itemsBeforeDiscount - discountTotal + deliveryFee;
+    ? safeNum(paymentTotalRaw, itemsAfterDiscount - discountTotal + deliveryFee)
+    : itemsAfterDiscount - discountTotal + deliveryFee;
   return `
     <div class="card">
       <div class="row" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -1256,6 +1308,15 @@ function renderOrderCard(order, menuMap) {
           <div class="muted" style="font-size:12px;">Оплата</div>
           <div class="row" style="justify-content:space-between;">
             <span class="muted">items (до скидки)</span><b>${rub(itemsBeforeDiscount)}</b>
+          </div>
+          <div class="row" style="justify-content:space-between;">
+            <span class="muted">скидка по позициям</span><b>${rub(itemDiscountTotal)}</b>
+          </div>
+          <div class="row" style="justify-content:space-between;">
+            <span class="muted">скидка на заказ</span><b>${rub(orderDiscountTotal)}</b>
+          </div>
+          <div class="row" style="justify-content:space-between;">
+            <span class="muted">items (после скидок)</span><b>${rub(itemsAfterDiscount)}</b>
           </div>
           <div class="row" style="justify-content:space-between;">
             <span class="muted">скидка</span><b>${rub(discountTotal)}</b>
@@ -1302,6 +1363,10 @@ function renderOrderCard(order, menuMap) {
           const price = safeNum(it.price, 0);
           const modsTotal = (it.modifications || []).reduce((s, m) => s + safeNum(m.price, 0) * safeNum(m.quantity, 1), 0);
           const unitPrice = price + modsTotal;
+          const baseTotal = unitPrice * qty;
+          const itemDiscountPercent = readItemDiscountPercent(it);
+          const itemDiscountTotal = baseTotal * (itemDiscountPercent / 100);
+          const discountedTotal = baseTotal - itemDiscountTotal;
           const menuItem = menuMap?.get?.(String(it.id));
           const imgUrl = menuItem?.images?.[0]?.url || menuItem?.images?.[0] || '';
           const itemPromos = summarizePromos(Array.isArray(it.promos) ? it.promos : []);
@@ -1324,7 +1389,8 @@ function renderOrderCard(order, menuMap) {
                 </div>
                 <div style="text-align:right;">
                   <div class="muted" style="font-size:12px;">${qty} × ${rub(unitPrice)}</div>
-                  <div style="font-weight:700;">${rub(qty * unitPrice)}</div>
+                  ${itemDiscountPercent > 0 ? `<div class="muted" style="font-size:12px;">до скидки ${rub(baseTotal)}</div>` : ''}
+                  <div style="font-weight:700;">${rub(discountedTotal)}</div>
                 </div>
               </div>
             </div>
@@ -1341,10 +1407,18 @@ function renderOrderCard(order, menuMap) {
 
 function cartScreen() {
   const st = window.appState;
-  st.cart ||= { items: [] };
+  st.cart ||= { items: [], orderDiscountPercent: 0 };
 
   const items = st.cart.items || [];
-  const total = cartTotal();
+  const orderDiscountPercent = clampPercent(st.cart.orderDiscountPercent ?? 0);
+  const itemsBaseTotal = items.reduce((sum, it) => sum + calcItemBaseTotal(it), 0);
+  const itemsDiscountTotal = items.reduce((sum, it) => {
+    const percent = readItemDiscountPercent(it);
+    return sum + calcItemBaseTotal(it) * (percent / 100);
+  }, 0);
+  const itemsAfterItemDiscount = itemsBaseTotal - itemsDiscountTotal;
+  const orderDiscountTotal = itemsAfterItemDiscount * (orderDiscountPercent / 100);
+  const total = itemsAfterItemDiscount - orderDiscountTotal;
 
   render(`
     ${header('Корзина')}
@@ -1352,6 +1426,10 @@ function cartScreen() {
       <div class="list">
         ${items.map((x) => {
           const mods = (x.modifications || []).map(m => `${m.name}${m.quantity > 1 ? ` ×${m.quantity}` : ''}${m.price ? ` (+${rub(m.price * (m.quantity||1))})` : ''}`).join(', ');
+          const baseTotal = calcItemBaseTotal(x);
+          const itemDiscountPercent = readItemDiscountPercent(x);
+          const itemDiscount = baseTotal * (itemDiscountPercent / 100);
+          const discountedTotal = baseTotal - itemDiscount;
           return `
             <div class="card">
               <div class="row" style="align-items:flex-start;gap:10px;">
@@ -1367,7 +1445,14 @@ function cartScreen() {
                       <div style="min-width:22px;text-align:center;">${x.quantity}</div>
                       <button type="button" class="inc">+</button>
                     </div>
-                    <div style="font-weight:800;">${rub((Number(x.quantity||1) * (Number(x.price||0) + (x.modifications||[]).reduce((s,m)=>s+safeNum(m.price,0)*safeNum(m.quantity,1),0))))}</div>
+                    <label class="field" style="width:120px;">
+                      <span class="field-label">Скидка %</span>
+                      <input class="itemDiscountInput" data-discount-key="${x.key}" type="number" min="0" max="100" step="1" value="${itemDiscountPercent}" />
+                    </label>
+                    <div style="text-align:right;">
+                      ${itemDiscountPercent > 0 ? `<div class="muted" style="font-size:12px;">до скидки ${rub(baseTotal)}</div>` : ''}
+                      <div style="font-weight:800;">${rub(discountedTotal)}</div>
+                    </div>
                   </div>
                 </div>
               </div>
@@ -1424,6 +1509,23 @@ function cartScreen() {
           <div style="font-weight:900;font-size:18px;">${rub(total)}</div>
         </div>
         <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap;">
+          <label class="field" style="width:160px;">
+            <span class="field-label">Скидка на заказ %</span>
+            <input id="orderDiscountPercent" type="number" min="0" max="100" step="1" value="${orderDiscountPercent}" />
+          </label>
+          <div style="flex:1;min-width:180px;">
+            <div class="row" style="justify-content:space-between;">
+              <span class="muted">items (до скидки)</span><b>${rub(itemsBaseTotal)}</b>
+            </div>
+            <div class="row" style="justify-content:space-between;">
+              <span class="muted">скидка по позициям</span><b>${rub(itemsDiscountTotal)}</b>
+            </div>
+            <div class="row" style="justify-content:space-between;">
+              <span class="muted">скидка на заказ</span><b>${rub(orderDiscountTotal)}</b>
+            </div>
+          </div>
+        </div>
+        <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap;">
           <button id="clearCart" type="button">Очистить корзину</button>
           <button id="showOrderJson" type="button">JSON заказа</button>
           <button id="downloadOrderJson" type="button">Скачать JSON</button>
@@ -1468,6 +1570,14 @@ function cartScreen() {
   bind('change','change');
   bind('eatsId','eatsId');
   bind('comment','comment');
+  const orderDiscountInput = document.getElementById('orderDiscountPercent');
+  if (orderDiscountInput) {
+    orderDiscountInput.onchange = () => {
+      st.cart.orderDiscountPercent = clampPercent(orderDiscountInput.value);
+      saveCart(st.cart);
+      rerender();
+    };
+  }
   const showBtn=document.getElementById('showOrderJson');
   if(showBtn) showBtn.onclick=()=>{const payload=buildOrderPayload(); openJsonDialog(payload);};
   const dlBtn=document.getElementById('downloadOrderJson');
@@ -1486,7 +1596,7 @@ function cartScreen() {
   const vv0 = validateOrderForm();
   if (checkoutBtn) checkoutBtn.disabled = !vv0.ok;
 
-  const watchIds = ['addrFull','addrLat','addrLon','persons','deliveryFee','change','eatsId','comment'];
+  const watchIds = ['addrFull','addrLat','addrLon','persons','deliveryFee','change','eatsId','comment','orderDiscountPercent'];
   for (const id of watchIds) {
     const el = document.getElementById(id);
     if (!el) continue;
@@ -1538,6 +1648,17 @@ function cartScreen() {
     };
     el.querySelector('.inc').onclick = () => {
       updateCartItemQty(x.key, Number(x.quantity) + 1);
+      rerender();
+    };
+  }
+  const discountInputs = document.querySelectorAll('.itemDiscountInput');
+  for (const input of discountInputs) {
+    input.onchange = () => {
+      const key = input.dataset.discountKey;
+      const item = st.cart?.items?.find((i) => i.key === key);
+      if (!item) return;
+      item.discountPercent = clampPercent(input.value);
+      saveCart(st.cart);
       rerender();
     };
   }
