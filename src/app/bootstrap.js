@@ -353,13 +353,22 @@ function normalizePromosResponse(raw) {
   const outer = unwrapJsonPayload(raw);
   if (!outer) return [];
 
+  const extractPromos = (payload) => {
+    if (Array.isArray(payload)) return payload;
+    if (!payload) return [];
+    if (Array.isArray(payload?.promos)) return payload.promos;
+    if (Array.isArray(payload?.items)) return payload.items;
+    if (Array.isArray(payload?.products)) return payload.products;
+    if (Array.isArray(payload?.promotions)) return payload.promotions;
+    return [];
+  };
+
   if (outer.data != null) {
     const inner = unwrapJsonPayload(outer.data);
-    return Array.isArray(inner?.promos) ? inner.promos : (Array.isArray(inner) ? inner : []);
+    return extractPromos(inner);
   }
 
-  if (Array.isArray(outer?.promos)) return outer.promos;
-  return Array.isArray(outer) ? outer : [];
+  return extractPromos(outer);
 }
 
 function normalizeOrderResponse(raw) {
@@ -939,6 +948,7 @@ async function menuScreen() {
                   <div style="margin-left:auto;font-weight:700;">${rub(item.price)}</div>
                 </div>
                 ${disabled ? `<div style="margin-top:6px;"><span class="badge">Недоступно</span></div>` : ``}
+                ${hasPromo ? `<div style="margin-top:6px;"><span class="badge">ДОСТУПНО В ПОДАРОК</span></div>` : ``}
               </div>
             </div>
 
@@ -1016,7 +1026,7 @@ async function menuScreen() {
 
             <div class="dlgActions">
               <button id="addToCartBtn" type="button" ${disabled || errs.length ? 'disabled' : ''}>В корзину</button>
-              ${hasPromo ? `<button id="addPromoBtn" type="button" ${disabled || errs.length ? 'disabled' : ''}>Добавить как промо/подарок</button>` : ''}
+              ${hasPromo ? `<button id="addPromoBtn" type="button" ${disabled || errs.length ? 'disabled' : ''}>В корзину как подарок</button>` : ''}
               <button id="closeItemDlg" type="button">Закрыть</button>
             </div>
 
@@ -1147,14 +1157,15 @@ async function menuScreen() {
               </div>
               <div class="row" style="gap:6px;flex-wrap:wrap;">
                 ${disabled ? `<div class="badge">Недоступно</div>` : ``}
-                ${hasPromo ? `<button class="badge promoBtn" type="button" data-item="${escAttr(it.id)}">PROMO</button>` : ``}
+                ${hasPromo ? `<div class="badge">ДОСТУПНО В ПОДАРОК</div>` : ``}
               </div>
+              ${hasPromo ? `<button class="promoGiftBtn" type="button" data-item="${escAttr(it.id)}">В корзину как подарок</button>` : ``}
             </div>
           `;
 
-          const promoBtn = card.querySelector('.promoBtn');
-          if (promoBtn) {
-            promoBtn.onclick = (ev) => {
+          const promoGiftBtn = card.querySelector('.promoGiftBtn');
+          if (promoGiftBtn) {
+            promoGiftBtn.onclick = (ev) => {
               ev.stopPropagation();
               try { addToCart(it, {}, { promos: promoEntries }); } catch (err) { console.error(err); }
               try { rerender(); } catch (err) { console.error(err); }
