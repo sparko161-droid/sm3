@@ -1212,6 +1212,25 @@ function renderOrderCard(order, menuMap) {
   const paymentType = safeStr(payment.paymentType, '');
   const change = safeNum(payment.change, 0);
   const promoSummary = summarizePromos(flattenPromos(order));
+  const itemsBaseTotal = items.reduce((sum, it) => {
+    const qty = safeNum(it.quantity, 1);
+    const price = safeNum(it.price, 0);
+    const modsTotal = (it.modifications || []).reduce((s, m) => s + safeNum(m.price, 0) * safeNum(m.quantity, 1), 0);
+    return sum + qty * (price + modsTotal);
+  }, 0);
+  const paymentItemsRaw = payment.itemsCost;
+  const itemsBeforeDiscount = paymentItemsRaw !== undefined && paymentItemsRaw !== null
+    ? safeNum(paymentItemsRaw, itemsBaseTotal)
+    : itemsBaseTotal;
+  const paymentDiscountRaw = payment.discountTotal ?? payment.discount;
+  const discountTotal = paymentDiscountRaw !== undefined && paymentDiscountRaw !== null
+    ? safeNum(paymentDiscountRaw, promoSummary.discountTotal)
+    : promoSummary.discountTotal;
+  const deliveryFee = safeNum(payment.deliveryFee, 0);
+  const paymentTotalRaw = payment.total;
+  const totalAfterDiscount = paymentTotalRaw !== undefined && paymentTotalRaw !== null
+    ? safeNum(paymentTotalRaw, itemsBeforeDiscount - discountTotal + deliveryFee)
+    : itemsBeforeDiscount - discountTotal + deliveryFee;
   return `
     <div class="card">
       <div class="row" style="justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap;">
@@ -1234,13 +1253,16 @@ function renderOrderCard(order, menuMap) {
         <div>
           <div class="muted" style="font-size:12px;">Оплата</div>
           <div class="row" style="justify-content:space-between;">
-            <span class="muted">items</span><b>${rub(payment.itemsCost)}</b>
+            <span class="muted">items (до скидки)</span><b>${rub(itemsBeforeDiscount)}</b>
           </div>
           <div class="row" style="justify-content:space-between;">
-            <span class="muted">delivery</span><b>${rub(payment.deliveryFee)}</b>
+            <span class="muted">скидка</span><b>${rub(discountTotal)}</b>
           </div>
           <div class="row" style="justify-content:space-between;">
-            <span class="muted">total</span><b>${rub(payment.total)}</b>
+            <span class="muted">delivery</span><b>${rub(deliveryFee)}</b>
+          </div>
+          <div class="row" style="justify-content:space-between;">
+            <span class="muted">total (после скидок)</span><b>${rub(totalAfterDiscount)}</b>
           </div>
           ${paymentType ? `
             <div class="row" style="justify-content:space-between;">
