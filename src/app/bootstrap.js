@@ -1734,11 +1734,16 @@ function cartScreen() {
             </div>
           </div>
         </div>
+        <div id="checkoutHint" class="muted" style="font-size:12px;margin-top:8px;">
+          ${isDelivery
+            ? 'Чтобы активировать кнопку, заполните адрес доставки и добавьте позиции в корзину.'
+            : 'Чтобы активировать кнопку, заполните платформу, время курьера и добавьте позиции в корзину.'}
+        </div>
         <div class="row" style="gap:8px;margin-top:10px;flex-wrap:wrap;">
           <button id="clearCart" type="button">Очистить корзину</button>
           <button id="showOrderJson" type="button">JSON заказа</button>
           <button id="downloadOrderJson" type="button">Скачать JSON</button>
-          <button id="checkoutBtn" type="button" disabled>Отправить (позже)</button>
+          <button id="checkoutBtn" type="button" disabled>Отправить заказ</button>
         </div>
       </div>
 
@@ -1821,36 +1826,62 @@ function cartScreen() {
   if (goOrderFromCart) goOrderFromCart.onclick = () => setScreen('orders');
 
   const checkoutBtn = document.getElementById('checkoutBtn');
+  const checkoutHint = document.getElementById('checkoutHint');
   const validateOrderForm = () => {
     const p = buildOrderPayload();
-    const useDelivery = (f.orderType || 'delivery') !== 'pickup';
+    const orderType = f.orderType || 'delivery';
+    const useDelivery = orderType !== 'pickup';
     const addr = p.deliveryInfo?.deliveryAddress || {};
-    const addrOk = useDelivery
-      ? String(addr.full || '').trim() && String(addr.latitude || '').trim() && String(addr.longitude || '').trim()
-      : true;
+    const requireCoords = false;
+    const missing = [];
+    if (useDelivery) {
+      if (!String(addr.full || '').trim()) missing.push('адрес');
+      if (requireCoords) {
+        if (!String(addr.latitude || '').trim() || !String(addr.longitude || '').trim()) {
+          missing.push('координаты');
+        }
+      }
+    } else {
+      if (!String(p.platform || '').trim()) missing.push('платформа');
+      if (!String(p.deliveryInfo?.courierArrivementDate || '').trim()) missing.push('время курьера');
+    }
     const restOk = String(p.restaurantId || '').trim().length > 0;
     const itemsOk = Array.isArray(p.items) && p.items.length > 0;
-    return { ok: !!(addrOk && restOk && itemsOk), payload: p };
+    if (!restOk) missing.push('ресторан');
+    if (!itemsOk) missing.push('позиции');
+    return { ok: !!(missing.length === 0), payload: p, missing, useDelivery, requireCoords };
   };
 
-  const vv0 = validateOrderForm();
-  if (checkoutBtn) checkoutBtn.disabled = !vv0.ok;
+  const updateCheckoutState = () => {
+    const vv = validateOrderForm();
+    if (checkoutBtn) checkoutBtn.disabled = !vv.ok;
+    if (checkoutHint) {
+      if (vv.ok) {
+        checkoutHint.textContent = 'Все обязательные поля заполнены — можно отправлять заказ.';
+      } else {
+        const missingText = vv.missing.join(', ');
+        checkoutHint.textContent = `Чтобы активировать кнопку, заполните: ${missingText}.`;
+      }
+    }
+    return vv;
+  };
+
+  const vv0 = updateCheckoutState();
 
   const watchIds = ['addrFull','addrLat','addrLon','deliveryDate','platform','courierArrivementDate','persons','deliveryFee','change','eatsId','comment'];
   for (const id of watchIds) {
     const el = document.getElementById(id);
     if (!el) continue;
     const prev = el.oninput;
-    el.oninput = (e) => { if (prev) prev(e); const vv = validateOrderForm(); if (checkoutBtn) checkoutBtn.disabled = !vv.ok; };
+    el.oninput = (e) => { if (prev) prev(e); updateCheckoutState(); };
   }
 
   if (checkoutBtn) checkoutBtn.onclick = async () => {
-    const vv = validateOrderForm();
+    const vv = updateCheckoutState();
     if (!vv.ok) {
-      const useDelivery = (f.orderType || 'delivery') !== 'pickup';
-      const msg = useDelivery
-        ? 'Заполни адрес (full + lat/lon) и добавь позиции в корзину.'
-        : 'Добавь позиции в корзину и проверь данные самовывоза.';
+      const msg = vv.useDelivery
+        ? `Заполни обязательные поля: ${vv.missing.join(', ')}.`
+        : `Заполни обязательные поля: ${vv.missing.join(', ')}.`;
       try { tg().showPopup?.({ title: 'Не готово', message: msg, buttons: [{ id:'ok', type:'ok', text:'OK'}] }); } catch(_) {}
       return;
     }
