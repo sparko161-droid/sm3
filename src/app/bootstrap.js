@@ -431,13 +431,19 @@ function summarizePromos(promos) {
   const list = Array.isArray(promos) ? promos : [];
   let discountTotal = 0;
   let giftCount = 0;
+  const promoTypeLabels = {
+    PERCENTAGE: 'Процентная скидка',
+    FIXED: 'Фиксированная скидка',
+    GIFT: 'Подарок',
+  };
   const readable = list.map((p) => {
     const discount = safeNum(p.discount, 0);
     discountTotal += discount;
     if (!discount) giftCount += 1;
     const type = safeStr(p.type, 'PROMO');
+    const readableType = promoTypeLabels[type] ? `${promoTypeLabels[type]} (${type})` : type;
     const scope = p.scope === 'item' ? `позиция: ${safeStr(p.itemName, p.itemId)}` : 'заказ';
-    const label = discount ? `${type}: -${rub(discount)}` : `${type}: подарок`;
+    const label = discount ? `${readableType}: -${rub(discount)}` : `${readableType}: подарок`;
     return `${label} · ${scope}`;
   });
   return { discountTotal, giftCount, readable };
