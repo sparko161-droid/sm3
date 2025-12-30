@@ -20,6 +20,11 @@ export const getAvailability = (restaurantId) => {
   return req({ method: 'GET', url: `${baseUrl}/menu/${restaurantId}/availability` });
 };
 
+export const getPromos = (restaurantId) => {
+  const { baseUrl } = loadAuth();
+  return req({ method: 'GET', url: `${baseUrl}/menu/${restaurantId}/promos` });
+};
+
 export const createOrder = (payload) => {
   const { baseUrl } = loadAuth();
   return req({
