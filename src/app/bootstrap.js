@@ -17,6 +17,7 @@ import {
   getRestaurants,
   getMenuComposition,
   getAvailability,
+  getPromos,
   createOrder,
   getOrder,
   deleteOrder,
@@ -37,6 +38,7 @@ window.appState ||= {
   orderDraft: null,
   orderDraftText: '',
   orderMenuMap: null,
+  promoItemsById: {},
   orderId: loadOrderId(),
   screen: 'auth',      // auth | restaurants | hub | menu | availability | cart
   history: [],         // stack of previous screens for Back
@@ -197,9 +199,11 @@ function cartCount() {
   return items.reduce((s, x) => s + Number(x.quantity || 0), 0);
 }
 
-function buildCartKey(itemId, modifiers) {
+function buildCartKey(itemId, modifiers, promos) {
   const mods = (modifiers || []).slice().sort((a,b) => String(a.id).localeCompare(String(b.id)));
-  return String(itemId) + '|' + mods.map(m => `${m.id}:${m.amount || 1}`).join(',');
+  const promoParts = (promos || []).slice().sort((a, b) => String(a.promoId).localeCompare(String(b.promoId)))
+    .map((p) => `${p.promoId || ''}:${p.type || ''}`);
+  return `${String(itemId)}|${mods.map(m => `${m.id}:${m.amount || 1}`).join(',')}|${promoParts.join(',')}`;
 }
 
 function selectionToModifiers(item, sel) {
@@ -223,7 +227,7 @@ function selectionToModifiers(item, sel) {
   return out;
 }
 
-function addToCart(item, sel) {
+function addToCart(item, sel, { promos } = {}) {
   const st = window.appState;
   st.cart ||= { items: [] };
 
@@ -234,7 +238,12 @@ function addToCart(item, sel) {
     price: safeNum(m.price, 0)
   }));
 
-  const key = buildCartKey(item.id, modifications.map(mm => ({ id: mm.id, amount: mm.quantity })));
+  const promoEntries = Array.isArray(promos) ? promos : [];
+  const key = buildCartKey(
+    item.id,
+    modifications.map(mm => ({ id: mm.id, amount: mm.quantity })),
+    promoEntries
+  );
 
   const existing = (st.cart.items || []).find(x => x.key === key);
   if (existing) {
@@ -247,7 +256,7 @@ function addToCart(item, sel) {
       quantity: 1,
       price: safeNum(item.price, 0),
       modifications,
-      promos: [],
+      promos: promoEntries,
       imgUrl: item.images?.[0]?.url || item.images?.[0] || ''
     })))
   }
@@ -337,6 +346,19 @@ function normalizeAvailabilityResponse(raw) {
   };
 }
 
+function normalizePromosResponse(raw) {
+  const outer = unwrapJsonPayload(raw);
+  if (!outer) return [];
+
+  if (outer.data != null) {
+    const inner = unwrapJsonPayload(outer.data);
+    return Array.isArray(inner?.promos) ? inner.promos : (Array.isArray(inner) ? inner : []);
+  }
+
+  if (Array.isArray(outer?.promos)) return outer.promos;
+  return Array.isArray(outer) ? outer : [];
+}
+
 function normalizeOrderResponse(raw) {
   const outer = unwrapJsonPayload(raw);
   if (!outer) return null;
@@ -347,6 +369,36 @@ function normalizeOrderResponse(raw) {
   }
 
   return outer;
+}
+
+function buildPromoItemsById(promos) {
+  const map = new Map();
+  const list = Array.isArray(promos) ? promos : [];
+  for (const promo of list) {
+    const itemId = promo?.itemId ?? promo?.item?.id ?? promo?.productId;
+    if (!itemId) continue;
+    const key = String(itemId);
+    const entries = map.get(key) || [];
+    entries.push(promo);
+    map.set(key, entries);
+  }
+  return map;
+}
+
+function buildPromoEntriesForItem(itemId, promoMap) {
+  if (!itemId || !promoMap) return [];
+  const variants = stopIdVariants(itemId);
+  let promos = promoMap.get(String(itemId)) || [];
+  if (!promos.length && variants.length) {
+    for (const v of variants) {
+      promos = promoMap.get(String(v)) || [];
+      if (promos.length) break;
+    }
+  }
+  return promos.map((promo) => ({
+    promoId: promo?.promoId ?? promo?.id ?? promo?.promoID ?? '',
+    type: promo?.type ?? 'GIFT',
+  })).filter((p) => p.promoId || p.type);
 }
 
 function stopIdVariants(value) {
@@ -685,9 +737,10 @@ async function menuScreen() {
     const restaurantId = st.restaurant.id;
 
     // composition + availability (чтобы сразу серить недоступные)
-    const [rawComp, rawAvail0] = await Promise.all([
+    const [rawComp, rawAvail0, rawPromos0] = await Promise.all([
       getMenuComposition(restaurantId),
       getAvailability(restaurantId).catch(() => null),
+      getPromos(restaurantId).catch(() => null),
     ]);
 
     const menu = normalizeMenuResponse(rawComp);
@@ -695,6 +748,9 @@ async function menuScreen() {
     const menuVm = buildMenuViewModel(menu);
 
     const rawAvail = rawAvail0 ? normalizeAvailabilityResponse(rawAvail0) : { items: [], modifiers: [] };
+    const rawPromos = rawPromos0 ? normalizePromosResponse(rawPromos0) : [];
+    const promoMap = buildPromoItemsById(rawPromos);
+    st.promoItemsById = promoMap;
 
     // itemId в availability может приходить в "упакованном" виде и содержать хвосты ("-8 шт" и т.п.).
     // Для устойчивого матчинга серим по набору вариантов.
@@ -785,6 +841,8 @@ async function menuScreen() {
       // локальное состояние выбора модификаторов (для предпросмотра)
       const sel = {};
       for (const g of (item.modifierGroups || [])) sel[g.id] = {};
+      const promoEntries = buildPromoEntriesForItem(item.id, promoMap);
+      const hasPromo = promoEntries.length > 0;
 
       // delegated actions: survive innerHTML re-renders
       itemDlg.onclick = (e) => {
@@ -792,6 +850,11 @@ async function menuScreen() {
         if (!t || !t.id) return;
         if (t.id === 'addToCartBtn') {
           try { addToCart(item, sel); } catch (err) { console.error(err); }
+          try { rerender(); } catch (err) { console.error(err); }
+          try { itemDlg.close(); } catch (_) {}
+        }
+        if (t.id === 'addPromoBtn') {
+          try { addToCart(item, sel, { promos: promoEntries }); } catch (err) { console.error(err); }
           try { rerender(); } catch (err) { console.error(err); }
           try { itemDlg.close(); } catch (_) {}
         }
@@ -908,6 +971,7 @@ async function menuScreen() {
 
             <div class="dlgActions">
               <button id="addToCartBtn" type="button" ${disabled || errs.length ? 'disabled' : ''}>В корзину</button>
+              ${hasPromo ? `<button id="addPromoBtn" type="button" ${disabled || errs.length ? 'disabled' : ''}>Добавить как промо/подарок</button>` : ''}
               <button id="closeItemDlg" type="button">Закрыть</button>
             </div>
 
@@ -1022,6 +1086,9 @@ async function menuScreen() {
             ? `${it.measure} ${it.measureUnit || ''}`.trim()
             : (it.weight ? `${it.weight}` : '');
 
+          const promoEntries = buildPromoEntriesForItem(it.id, promoMap);
+          const hasPromo = promoEntries.length > 0;
+
           card.innerHTML = `
             <div class="menu-img">
               ${imgUrl ? `<img src="${imgUrl}" alt="">` : `<div class="menu-noimg">нет фото</div>`}
@@ -1033,9 +1100,21 @@ async function menuScreen() {
                 <span class="muted">${weight}</span>
                 <b>${rub(it.price)}</b>
               </div>
-              ${disabled ? `<div class="badge">Недоступно</div>` : ``}
+              <div class="row" style="gap:6px;flex-wrap:wrap;">
+                ${disabled ? `<div class="badge">Недоступно</div>` : ``}
+                ${hasPromo ? `<button class="badge promoBtn" type="button" data-item="${escAttr(it.id)}">PROMO</button>` : ``}
+              </div>
             </div>
           `;
+
+          const promoBtn = card.querySelector('.promoBtn');
+          if (promoBtn) {
+            promoBtn.onclick = (ev) => {
+              ev.stopPropagation();
+              try { addToCart(it, {}, { promos: promoEntries }); } catch (err) { console.error(err); }
+              try { rerender(); } catch (err) { console.error(err); }
+            };
+          }
 
           // Клик по карточке — открыть расширенную информацию + выбор модификаторов
           card.onclick = () => openItemDialog(it, { disabled });
@@ -1060,6 +1139,7 @@ async function menuScreen() {
       restaurantId,
       lastChange: menuVm.lastChange,
       availability: rawAvail,
+      promos: rawPromos,
       menu,
     });
 
@@ -1130,6 +1210,7 @@ function cartToOrderItems() {
     const name = safeStr(x.name, id || '');
     const quantity = safeNum(x.quantity, safeNum(x.qty, 1));
     const price = safeNum(x.price, safeNum(x.basePrice, 0));
+    const promos = Array.isArray(x.promos) ? x.promos : [];
 
     const rawMods = Array.isArray(x.modifications) ? x.modifications : (Array.isArray(x.modifiers) ? x.modifiers : []);
     const modifications = rawMods.map((m) => ({
@@ -1139,7 +1220,7 @@ function cartToOrderItems() {
       price: safeNum(m.price, 0),
     }));
 
-    return { id, name, quantity, price, modifications, promos: [] };
+    return { id, name, quantity, price, modifications, promos };
   });
 }
 function calcItemsCost(orderItems) {
@@ -1314,6 +1395,7 @@ function renderOrderCard(order, menuMap) {
                 <div style="min-width:0;flex:1;">
                   <div style="font-weight:650;">${safeStr(it.name, it.id)}</div>
                   <div class="muted" style="font-size:12px;">id: <code>${safeStr(it.id, '')}</code></div>
+                  ${itemPromos.discountTotal || itemPromos.giftCount ? `<div style="margin-top:4px;"><span class="badge">Промо</span></div>` : ''}
                   ${mods ? `<div class="muted" style="font-size:12px;margin-top:4px;">${mods}</div>` : ''}
                   ${itemPromos.discountTotal || itemPromos.giftCount ? `
                     <div class="muted" style="font-size:12px;margin-top:4px;">
@@ -1352,6 +1434,7 @@ function cartScreen() {
       <div class="list">
         ${items.map((x) => {
           const mods = (x.modifications || []).map(m => `${m.name}${m.quantity > 1 ? ` ×${m.quantity}` : ''}${m.price ? ` (+${rub(m.price * (m.quantity||1))})` : ''}`).join(', ');
+          const promoLabel = Array.isArray(x.promos) && x.promos.length ? `<span class="badge">Промо</span>` : '';
           return `
             <div class="card">
               <div class="row" style="align-items:flex-start;gap:10px;">
@@ -1360,6 +1443,7 @@ function cartScreen() {
                 </div>
                 <div style="min-width:0;flex:1;">
                   <div style="font-weight:650;">${x.name}</div>
+                  ${promoLabel ? `<div style="margin-top:4px;">${promoLabel}</div>` : ``}
                   ${mods ? `<div class="muted" style="font-size:12px;margin-top:4px;">${mods}</div>` : ``}
                   <div class="row" style="justify-content:space-between;margin-top:8px;align-items:center;">
                     <div class="stepper" data-step="${x.key}">
@@ -1906,15 +1990,19 @@ async function availabilityScreen() {
 
     // Берём и composition, чтобы показать “человеческие” карточки (имя/фото/цена),
     // а также нормализуем упакованный ответ availability ({data:"{...}"}).
-    const [rawAvail0, rawComp] = await Promise.all([
+    const [rawAvail0, rawComp, rawPromos0] = await Promise.all([
       getAvailability(restaurantId),
       getMenuComposition(restaurantId).catch(() => null),
+      getPromos(restaurantId).catch(() => null),
     ]);
 
     const rawAvail = normalizeAvailabilityResponse(rawAvail0);
     const menu = rawComp ? normalizeMenuResponse(rawComp) : { categories: [], items: [] };
     st.orderMenuMap = buildMenuItemMap(menu);
     const itemById = new Map((menu.items || []).map((it) => [String(it.id), it]));
+    const rawPromos = rawPromos0 ? normalizePromosResponse(rawPromos0) : [];
+    const promoMap = buildPromoItemsById(rawPromos);
+    st.promoItemsById = promoMap;
 
     const items = rawAvail?.items || [];
     const modifiers = rawAvail?.modifiers || [];
@@ -1968,6 +2056,9 @@ async function availabilityScreen() {
           ? `${it.measure} ${it.measureUnit || ''}`.trim()
           : (it?.weight ? `${it.weight}` : '');
 
+        const promoEntries = buildPromoEntriesForItem(it?.id, promoMap);
+        const hasPromo = promoEntries.length > 0;
+
         return `
           <div class="menu-card is-disabled">
             <div class="menu-img">
@@ -1984,17 +2075,29 @@ async function availabilityScreen() {
                 <span class="badge">stock: ${x.stock}</span>
                 <span class="muted" style="font-size:12px;">id: <code>${rawId}</code></span>
               </div>
+              ${hasPromo ? `<button class="badge promoBtn" type="button" data-item="${escAttr(it?.id || rawId)}">PROMO</button>` : ''}
             </div>
           </div>
         `;
       }).join('');
 
       root.innerHTML = `<div class="menu-grid">${cards}</div>`;
+
+      root.querySelectorAll('.promoBtn').forEach((btn) => {
+        btn.onclick = () => {
+          const itemId = btn.getAttribute('data-item');
+          const item = itemById.get(String(itemId));
+          if (!item) return;
+          const promoEntries = buildPromoEntriesForItem(item.id, promoMap);
+          try { addToCart(item, {}, { promos: promoEntries }); } catch (err) { console.error(err); }
+          try { rerender(); } catch (err) { console.error(err); }
+        };
+      });
     }
 
     renderCards();
 
-    document.getElementById('btnJson').onclick = () => openJsonDialog({ availability: rawAvail, menu });
+    document.getElementById('btnJson').onclick = () => openJsonDialog({ availability: rawAvail, menu, promos: rawPromos });
     document.getElementById('btnDownload').onclick = () => downloadJson(rawAvail, `availability_${restaurantId}.json`);
   } catch (e) {
     render(`${header('Недоступные позиции')}<pre>${JSON.stringify(e, null, 2)}</pre>`);
